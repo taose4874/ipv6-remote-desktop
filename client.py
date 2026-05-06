@@ -58,10 +58,13 @@ class ClientThread(QThread):
     def forward_data(self, src, dst, name):
         try:
             while self.running:
-                data = src.recv(BUFFER_SIZE)
-                if not data:
-                    break
-                dst.sendall(data)
+                try:
+                    data = src.recv(BUFFER_SIZE)
+                    if not data:
+                        break
+                    dst.sendall(data)
+                except socket.timeout:
+                    continue
         except Exception as e:
             self.log(f'转发错误 [{name}]: {e}', "error")
         finally:
@@ -77,7 +80,9 @@ class ClientThread(QThread):
     def handle_tunnel(self, tunnel_socket, local_port):
         try:
             local_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            local_socket.settimeout(2.0)
             local_socket.connect(('::1', local_port))
+            tunnel_socket.settimeout(2.0)
             self.log(f'连接本地端口: {local_port}', "info")
             
             thread1 = threading.Thread(target=self.forward_data, args=(tunnel_socket, local_socket, 'tunnel->local'))
@@ -88,13 +93,19 @@ class ClientThread(QThread):
             thread1.start()
             thread2.start()
             
-            thread1.join()
-            thread2.join()
+            # 不使用join()无限等待，而是定期检查是否需要停止
+            while self.running and (thread1.is_alive() or thread2.is_alive()):
+                time.sleep(0.1)
             
         except Exception as e:
             self.log(f'处理隧道错误: {e}', "error")
+        finally:
             try:
                 tunnel_socket.close()
+            except:
+                pass
+            try:
+                local_socket.close()
             except:
                 pass
                 
@@ -106,47 +117,63 @@ class ClientThread(QThread):
         while self.running:
             try:
                 control_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                control_socket.settimeout(2.0)
                 self.log(f'正在连接服务器: {server_addr}:{server_port}', "info")
                 control_socket.connect((server_addr, server_port))
                 self.log('连接服务器成功！', "success")
                 
                 buffer = ''
                 while self.running:
-                    data = control_socket.recv(BUFFER_SIZE)
-                    if not data:
+                    try:
+                        data = control_socket.recv(BUFFER_SIZE)
+                        if not data:
+                            break
+                            
+                        buffer += data.decode('utf-8', errors='ignore')
+                            
+                        while '\n' in buffer:
+                            line, buffer = buffer.split('\n', 1)
+                            line = line.strip()
+                                
+                            try:
+                                msg = json.loads(line)
+                                    
+                                if msg.get('type') == 'NEW_CONNECTION':
+                                    self.log('收到新连接请求！', "info")
+                                        
+                                    tunnel_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                                    tunnel_socket.settimeout(2.0)
+                                    tunnel_socket.connect((server_addr, server_port))
+                                        
+                                    tunnel_thread = threading.Thread(
+                                        target=self.handle_tunnel,
+                                        args=(tunnel_socket, local_port)
+                                    )
+                                    tunnel_thread.daemon = True
+                                    tunnel_thread.start()
+                                        
+                            except Exception as e:
+                                self.log(f'处理消息错误: {e}', "error")
+                    except socket.timeout:
+                        continue
+                    except Exception:
                         break
                         
-                    buffer += data.decode('utf-8', errors='ignore')
-                        
-                    while '\n' in buffer:
-                        line, buffer = buffer.split('\n', 1)
-                        line = line.strip()
-                            
-                        try:
-                            msg = json.loads(line)
-                                
-                            if msg.get('type') == 'NEW_CONNECTION':
-                                self.log('收到新连接请求！', "info")
-                                    
-                                tunnel_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-                                tunnel_socket.connect((server_addr, server_port))
-                                    
-                                tunnel_thread = threading.Thread(
-                                    target=self.handle_tunnel,
-                                    args=(tunnel_socket, local_port)
-                                )
-                                tunnel_thread.daemon = True
-                                tunnel_thread.start()
-                                    
-                        except Exception as e:
-                            self.log(f'处理消息错误: {e}', "error")
-                            
             except Exception as e:
                 self.log(f'连接服务器失败: {e}', "error")
                 self.log('5秒后重试...', "warning")
-                if self.running:
-                    time.sleep(5)
+                # 使用分段等待，这样可以立即响应停止信号
+                for _ in range(50):
+                    if not self.running:
+                        break
+                    time.sleep(0.1)
                 continue
+            
+            # 清理socket
+            try:
+                control_socket.close()
+            except:
+                pass
             
     def run(self):
         self.running = True

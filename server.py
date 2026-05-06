@@ -59,11 +59,15 @@ class ServerThread(QThread):
         
     def forward_data(self, src, dst, name):
         try:
+            src.settimeout(2.0)
             while self.running:
-                data = src.recv(BUFFER_SIZE)
-                if not data:
-                    break
-                dst.sendall(data)
+                try:
+                    data = src.recv(BUFFER_SIZE)
+                    if not data:
+                        break
+                    dst.sendall(data)
+                except socket.timeout:
+                    continue
         except Exception as e:
             self.log(f'转发错误 [{name}]: {e}', "error")
         finally:
@@ -94,8 +98,9 @@ class ServerThread(QThread):
             thread1.start()
             thread2.start()
             
-            thread1.join()
-            thread2.join()
+            # 不使用join()无限等待，而是定期检查是否需要停止
+            while self.running and (thread1.is_alive() or thread2.is_alive()):
+                time.sleep(0.1)
             
         except Exception as e:
             self.log(f'处理隧道连接错误: {e}', "error")
@@ -128,10 +133,14 @@ class ServerThread(QThread):
             self.client_connected = True
             
         try:
+            conn.settimeout(2.0)
             while self.running:
-                data = conn.recv(BUFFER_SIZE)
-                if not data:
-                    break
+                try:
+                    data = conn.recv(BUFFER_SIZE)
+                    if not data:
+                        break
+                except socket.timeout:
+                    continue
                     
         except Exception as e:
             self.log(f'客户端连接错误: {e}', "error")
@@ -150,6 +159,7 @@ class ServerThread(QThread):
     def start_game_listener(self, listen_port):
         listen_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listen_socket.settimeout(1.0)
         
         try:
             listen_socket.bind(('::', listen_port))
@@ -159,7 +169,6 @@ class ServerThread(QThread):
             
             while self.running:
                 try:
-                    listen_socket.settimeout(1.0)
                     try:
                         game_socket, addr = listen_socket.accept()
                         game_thread = threading.Thread(
@@ -177,11 +186,15 @@ class ServerThread(QThread):
         except Exception as e:
             self.log(f'游戏端口监听失败: {e}', "error")
         finally:
-            listen_socket.close()
+            try:
+                listen_socket.close()
+            except:
+                pass
             
     def start_control_listener(self, control_port):
         server_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.settimeout(1.0)
         
         try:
             server_socket.bind(('::', control_port))
@@ -191,7 +204,6 @@ class ServerThread(QThread):
             
             while self.running:
                 try:
-                    server_socket.settimeout(1.0)
                     try:
                         conn, addr = server_socket.accept()
                         
@@ -219,7 +231,10 @@ class ServerThread(QThread):
         except Exception as e:
             self.log(f'控制端口监听失败: {e}', "error")
         finally:
-            server_socket.close()
+            try:
+                server_socket.close()
+            except:
+                pass
             
     def run(self):
         self.running = True
