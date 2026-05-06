@@ -30,12 +30,12 @@ jobs:
 
       - name: Prepare common module for server
         run: |
-          mkdir -p server/common
+          if not exist server\common mkdir server\common
           copy common\*.py server\common\
 
       - name: Prepare common module for client
         run: |
-          mkdir -p client/common
+          if not exist client\common mkdir client\common
           copy common\*.py client\common\
 
       - name: Build Server
