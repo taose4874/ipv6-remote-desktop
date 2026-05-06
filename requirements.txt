@@ -1,4 +1,4 @@
-# IPv6 游戏中继服务器 - 依赖
+# IPv6 内网穿透工具
 
-# 标准库，无需安装
-# socket, threading, json, datetime
+# 只使用 Python 标准库
+# 无需额外依赖
