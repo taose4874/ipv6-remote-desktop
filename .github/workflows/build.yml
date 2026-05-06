@@ -12,38 +12,54 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-          
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          
+
+      - name: Prepare common module for server
+        run: |
+          mkdir -p server/common
+          copy common\*.py server\common\
+
       - name: Prepare common module for client
         run: |
           mkdir -p client/common
           copy common\*.py client\common\
-          
+
+      - name: Build Server
+        run: |
+          pyinstaller --clean server.spec
+
       - name: Build Client
         run: |
           pyinstaller --clean client.spec
-          
+
+      - name: Upload Server EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: IPv6RemoteDesktop-Server
+          path: dist/IPv6RemoteDesktop_Server.exe
+          if-no-files-found: error
+
       - name: Upload Client EXE
         uses: actions/upload-artifact@v4
         with:
           name: IPv6RemoteDesktop-Client
           path: dist/IPv6RemoteDesktop_Client.exe
           if-no-files-found: error
-          
+
       - name: Upload both EXEs together
         uses: actions/upload-artifact@v4
         with:
