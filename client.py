@@ -30,7 +30,7 @@ CONFIG_FILE = get_config_path('config_client.json')
 BUFFER_SIZE = 4096
 
 DEFAULT_CONFIG = {
-    "server_addr": "你的公网IPv6地址",
+    "server_addr": "",
     "server_port": 7000,
     "local_port": 25565
 }
@@ -69,7 +69,7 @@ class ClientThread(QThread):
                 except socket.timeout:
                     continue
         except Exception as e:
-            self.log(f'转发错误 [{name}]: {e}', "error")
+            pass
         finally:
             try:
                 src.close()
@@ -85,7 +85,7 @@ class ClientThread(QThread):
             local_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
             local_socket.settimeout(5.0)
             local_socket.connect(('::1', local_port))
-            self.log(f'连接本地端口: {local_port}', "info")
+            self.log(f'连接本地端口: {local_port}', 'info')
             
             thread1 = threading.Thread(target=self.forward_data, args=(tunnel_socket, local_socket, f'tunnel->{local_port}'))
             thread2 = threading.Thread(target=self.forward_data, args=(local_socket, tunnel_socket, f'{local_port}->tunnel'))
@@ -99,7 +99,7 @@ class ClientThread(QThread):
                 time.sleep(0.1)
             
         except Exception as e:
-            self.log(f'处理隧道错误: {e}', "error")
+            self.log(f'连接本地端口失败: {e}', 'error')
             try:
                 tunnel_socket.close()
             except:
@@ -117,8 +117,6 @@ class ClientThread(QThread):
             ready_msg = {'type': 'TUNNEL_READY', 'proxy_port': proxy_port}
             tunnel_socket.sendall((json.dumps(ready_msg) + '\n').encode('utf-8'))
             
-            self.log(f'隧道已创建，公网端口: {proxy_port}', "info")
-            
             tunnel_thread = threading.Thread(
                 target=self.handle_tunnel,
                 args=(tunnel_socket, local_port)
@@ -127,7 +125,7 @@ class ClientThread(QThread):
             tunnel_thread.start()
             
         except Exception as e:
-            self.log(f'创建隧道失败: {e}', "error")
+            self.log(f'创建隧道失败: {e}', 'error')
                 
     def connect_to_server(self):
         server_addr = self.config['server_addr']
@@ -137,11 +135,11 @@ class ClientThread(QThread):
         while self.running:
             try:
                 self.control_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-                self.log(f'正在连接服务器: {server_addr}:{server_port}', "info")
+                self.log(f'正在连接服务器: {server_addr}:{server_port}', 'info')
                 self.control_socket.connect((server_addr, server_port))
-                self.log('连接服务器成功！', "success")
+                self.log('连接服务器成功！', 'success')
                 
-                self.log(f'请求端口分配，本地端口: {local_port}', "info")
+                self.log(f'请求端口分配，本地端口: {local_port}', 'info')
                 req_msg = {'type': 'REQUEST_PORT', 'local_port': local_port}
                 self.control_socket.sendall((json.dumps(req_msg) + '\n').encode('utf-8'))
                 
@@ -163,16 +161,14 @@ class ClientThread(QThread):
                                 
                                 if msg.get('type') == 'PORT_ALLOCATED':
                                     self.public_port = msg.get('public_port')
-                                    self.log(f'端口分配成功！公网端口: {self.public_port}', "success")
+                                    self.log(f'端口分配成功！公网端口: {self.public_port}', 'success')
                                     self.log_emitter.port_allocated.emit(self.public_port)
                                     
                                 elif msg.get('type') == 'PORT_ERROR':
-                                    self.log(f'端口分配失败: {msg.get("message", "")}', "error")
+                                    self.log(f'端口分配失败: {msg.get("message", "")}', 'error')
                                     
                                 elif msg.get('type') == 'NEW_CONNECTION':
                                     proxy_port = msg.get('proxy_port')
-                                    self.log(f'收到新连接请求，端口: {proxy_port}', "info")
-                                    
                                     if proxy_port == self.public_port:
                                         tunnel_thread = threading.Thread(
                                             target=self.create_tunnel,
@@ -182,13 +178,13 @@ class ClientThread(QThread):
                                         tunnel_thread.start()
                                         
                             except Exception as e:
-                                self.log(f'处理消息错误: {e}', "error")
+                                self.log(f'处理消息错误: {e}', 'error')
                     except socket.timeout:
                         continue
                     
             except Exception as e:
-                self.log(f'连接服务器失败: {e}', "error")
-                self.log('5秒后重试...', "warning")
+                self.log(f'连接服务器失败: {e}', 'error')
+                self.log('5秒后重试...', 'warning')
                 for i in range(50):
                     if not self.running:
                         break
@@ -223,6 +219,8 @@ class ClientWindow(QMainWindow):
         self.log_emitter = LogEmitter()
         self.log_emitter.log_signal.connect(self.append_log)
         self.log_emitter.port_allocated.connect(self.on_port_allocated)
+        self.server_addr = ""
+        self.public_port = None
         self.init_ui()
         self.load_config()
         
@@ -251,21 +249,26 @@ class ClientWindow(QMainWindow):
         self.local_port_input = QSpinBox()
         self.local_port_input.setRange(1, 65535)
         self.local_port_input.setValue(25565)
-        config_layout.addRow('本地端口:', self.local_port_input)
+        config_layout.addRow('本地游戏端口:', self.local_port_input)
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
         
-        # 公网端口显示
-        port_group = QGroupBox('公网端口')
-        port_layout = QHBoxLayout()
+        # 公网链接显示
+        link_group = QGroupBox('公网连接地址')
+        link_layout = QHBoxLayout()
         
-        self.public_port_label = QLabel('未分配')
-        self.public_port_label.setStyleSheet('font-size: 18px; font-weight: bold; color: #666;')
-        port_layout.addWidget(self.public_port_label)
+        self.link_label = QLabel('未连接')
+        self.link_label.setStyleSheet('font-size: 18px; font-weight: bold; color: #666;')
+        link_layout.addWidget(self.link_label)
         
-        port_group.setLayout(port_layout)
-        main_layout.addWidget(port_group)
+        self.copy_link_btn = QPushButton('复制链接')
+        self.copy_link_btn.clicked.connect(self.copy_link)
+        self.copy_link_btn.setEnabled(False)
+        link_layout.addWidget(self.copy_link_btn)
+        
+        link_group.setLayout(link_layout)
+        main_layout.addWidget(link_group)
         
         # 控制按钮
         button_layout = QHBoxLayout()
@@ -311,11 +314,11 @@ class ClientWindow(QMainWindow):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                self.server_addr_input.setText(config.get('server_addr', '你的公网IPv6地址'))
+                self.server_addr_input.setText(config.get('server_addr', ''))
                 self.server_port_input.setValue(config.get('server_port', 7000))
                 self.local_port_input.setValue(config.get('local_port', 25565))
             except Exception as e:
-                self.append_log(f'配置加载失败: {e}', "error")
+                self.append_log(f'配置加载失败: {e}', 'error')
                 
     def save_config(self):
         config = {
@@ -327,7 +330,7 @@ class ClientWindow(QMainWindow):
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            self.append_log(f'配置保存失败: {e}', "error")
+            self.append_log(f'配置保存失败: {e}', 'error')
             
     def toggle_connection(self):
         if self.client_thread is None:
@@ -338,8 +341,13 @@ class ClientWindow(QMainWindow):
     def start_connection(self):
         self.save_config()
         
+        self.server_addr = self.server_addr_input.text().strip()
+        if not self.server_addr:
+            self.append_log('请填写服务器地址', 'error')
+            return
+        
         config = {
-            "server_addr": self.server_addr_input.text(),
+            "server_addr": self.server_addr,
             "server_port": self.server_port_input.value(),
             "local_port": self.local_port_input.value()
         }
@@ -392,15 +400,41 @@ class ClientWindow(QMainWindow):
         self.local_port_input.setEnabled(True)
         self.status_label.setText('状态: 已断开')
         self.status_label.setStyleSheet('font-size: 12px; color: #666;')
-        self.public_port_label.setText('未分配')
-        self.public_port_label.setStyleSheet('font-size: 18px; font-weight: bold; color: #666;')
-        self.append_log('连接已断开', "warning")
+        self.link_label.setText('未连接')
+        self.link_label.setStyleSheet('font-size: 18px; font-weight: bold; color: #666;')
+        self.copy_link_btn.setEnabled(False)
+        self.append_log('连接已断开', 'warning')
         
     def on_port_allocated(self, port):
-        self.public_port_label.setText(str(port))
-        self.public_port_label.setStyleSheet('font-size: 18px; font-weight: bold; color: #4CAF50;')
+        self.public_port = port
+        
+        if ':' in self.server_addr and self.server_addr.startswith('['):
+            link = f'{self.server_addr}:{port}'
+        elif ':' in self.server_addr:
+            link = f'[{self.server_addr}]:{port}'
+        else:
+            link = f'{self.server_addr}:{port}'
+        
+        self.link_label.setText(link)
+        self.link_label.setStyleSheet('font-size: 18px; font-weight: bold; color: #4CAF50;')
+        self.copy_link_btn.setEnabled(True)
         self.status_label.setText('状态: 已连接')
         self.status_label.setStyleSheet('font-size: 12px; color: #4CAF50; font-weight: bold;')
+        
+    def copy_link(self):
+        if not self.server_addr or not self.public_port:
+            return
+        
+        if ':' in self.server_addr and self.server_addr.startswith('['):
+            link = f'{self.server_addr}:{self.public_port}'
+        elif ':' in self.server_addr:
+            link = f'[{self.server_addr}]:{self.public_port}'
+        else:
+            link = f'{self.server_addr}:{self.public_port}'
+        
+        clipboard = QApplication.clipboard()
+        clipboard.setText(link)
+        self.append_log(f'已复制链接: {link}', 'success')
         
     def append_log(self, message, level="info"):
         timestamp = get_timestamp()
@@ -408,7 +442,7 @@ class ClientWindow(QMainWindow):
             "info": "#333333",
             "success": "#4CAF50",
             "warning": "#FF9800",
-            "error": "#F44336"
+            "error": "#f44336"
         }
         color = color_map.get(level, "#333333")
         

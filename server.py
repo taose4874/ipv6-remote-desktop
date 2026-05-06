@@ -6,6 +6,7 @@ import socket
 import threading
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -66,16 +67,16 @@ class ServerThread(QThread):
         
     def init_ports(self):
         port_start = self.config.get('port_start', 25565)
-        port_end = self.config.get('port_end', 25665)
+        port_end = self.config.get('port_end', 65535)
         self.available_ports = list(range(port_start, port_end + 1))
-        self.log(f'可用端口范围: {port_start} - {port_end}, 共 {len(self.available_ports)} 个端口', "info")
+        self.log(f'可用端口范围: {port_start} - {port_end}, 共 {len(self.available_ports)} 个端口', 'info')
         
     def allocate_port(self):
         with self.lock:
             if not self.available_ports:
                 return None
             port = self.available_ports.pop(0)
-            self.assigned_ports[port] = {'status': '空闲', 'client': None}
+            self.assigned_ports[port] = {'status': '已分配', 'client': None}
             return port
             
     def release_port(self, port):
@@ -85,6 +86,29 @@ class ServerThread(QThread):
                 self.available_ports.append(port)
                 self.available_ports.sort()
                 self.log_emitter.port_removed.emit(port)
+                
+    def get_local_ipv6(self):
+        try:
+            hostname = socket.gethostname()
+            addrs = socket.getaddrinfo(hostname, None, socket.AF_INET6)
+            for addr in addrs:
+                ip = addr[4][0]
+                if not ip.startswith('::1') and not ip.startswith('fe80:'):
+                    return ip
+        except Exception as e:
+            pass
+        
+        try:
+            s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            s.connect(('2001:4860:4860::8888', 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith('::1') and not ip.startswith('fe80:'):
+                return ip
+        except Exception as e:
+            pass
+        
+        return None
                 
     def forward_data(self, src, dst, name):
         try:
@@ -179,7 +203,7 @@ class ServerThread(QThread):
                     self.pending_connections[proxy_port].remove(game_socket)
                 
     def handle_client_control(self, conn, addr):
-        self.log(f'客户端连接: {addr[0]}:{addr[1]}', "success")
+        self.log(f'客户端连接: {addr[0]}:{addr[1]}', 'success')
         
         with self.lock:
             self.client_control_socket = conn
@@ -206,13 +230,11 @@ class ServerThread(QThread):
                             msg = json.loads(line)
                             if msg.get('type') == 'REQUEST_PORT':
                                 local_port = msg.get('local_port')
-                                self.log(f'收到端口请求，本地端口: {local_port}', "info")
+                                self.log(f'收到端口请求，本地端口: {local_port}', 'info')
                                 
                                 public_port = self.allocate_port()
                                 if public_port:
-                                    self.log(f'分配端口: {public_port}', "success")
-                                    self.assigned_ports[public_port]['status'] = '已分配'
-                                    self.assigned_ports[public_port]['client'] = f'{addr[0]}:{addr[1]}'
+                                    self.log(f'分配端口: {public_port}', 'success')
                                     self.log_emitter.port_added.emit(public_port, '已分配')
                                     
                                     resp_msg = {'type': 'PORT_ALLOCATED', 'public_port': public_port}
@@ -220,32 +242,32 @@ class ServerThread(QThread):
                                     
                                     self.start_proxy_listener(public_port)
                                 else:
-                                    self.log('没有可用端口', "error")
+                                    self.log('没有可用端口', 'error')
                                     resp_msg = {'type': 'PORT_ERROR', 'message': '没有可用端口'}
                                     conn.sendall((json.dumps(resp_msg) + '\n').encode('utf-8'))
                                     
                         except Exception as e:
-                            self.log(f'处理消息错误: {e}', "error")
+                            self.log(f'处理消息错误: {e}', 'error')
                 except socket.timeout:
                     continue
                     
         except Exception as e:
-            self.log(f'客户端连接错误: {e}', "error")
+            self.log(f'客户端连接错误: {e}', 'error')
         finally:
             with self.lock:
                 self.client_control_socket = None
                 self.client_connected = False
             
             for port in list(self.assigned_ports.keys()):
-                self.release_port(port)
                 self.stop_proxy_listener(port)
+                self.release_port(port)
             
             try:
                 conn.close()
             except:
                 pass
             
-            self.log(f'客户端断开: {addr[0]}', "warning")
+            self.log(f'客户端断开: {addr[0]}', 'warning')
             
     def start_proxy_listener(self, proxy_port):
         if proxy_port in self.proxy_listeners:
@@ -259,7 +281,6 @@ class ServerThread(QThread):
             listener_socket.bind(('::', proxy_port))
             listener_socket.listen(128)
             self.proxy_listeners[proxy_port] = listener_socket
-            self.log(f'开始监听端口: {proxy_port}', "info")
             
             def listen_thread():
                 while self.running and proxy_port in self.proxy_listeners:
@@ -275,20 +296,14 @@ class ServerThread(QThread):
                         except socket.timeout:
                             continue
                     except Exception as e:
-                        self.log(f'端口 {proxy_port} 监听错误: {e}', "error")
                         break
-                        
-                try:
-                    listener_socket.close()
-                except:
-                    pass
                     
             thread = threading.Thread(target=listen_thread)
             thread.daemon = True
             thread.start()
             
         except Exception as e:
-            self.log(f'监听端口 {proxy_port} 失败: {e}', "error")
+            self.log(f'监听端口 {proxy_port} 失败: {e}', 'error')
             self.release_port(proxy_port)
             
     def stop_proxy_listener(self, proxy_port):
@@ -299,31 +314,6 @@ class ServerThread(QThread):
                 pass
             del self.proxy_listeners[proxy_port]
             
-    def get_local_ipv6(self):
-        try:
-            hostname = socket.gethostname()
-            addrs = socket.getaddrinfo(hostname, None, socket.AF_INET6)
-            for addr in addrs:
-                ip = addr[4][0]
-                # 忽略本地回环和链路本地地址
-                if not ip.startswith('::1') and not ip.startswith('fe80:'):
-                    return ip
-        except Exception as e:
-            pass
-        
-        # 尝试连接到一个外部地址来获取本地IP
-        try:
-            s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-            s.connect(('2001:4860:4860::8888', 80))
-            ip = s.getsockname()[0]
-            s.close()
-            if ip and not ip.startswith('::1') and not ip.startswith('fe80:'):
-                return ip
-        except Exception as e:
-            pass
-        
-        return None
-    
     def start_control_listener(self, control_port):
         server_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -333,13 +323,12 @@ class ServerThread(QThread):
             server_socket.bind(('::', control_port))
             server_socket.listen(128)
             
-            # 获取本地IPv6
             ipv6 = self.get_local_ipv6()
             if ipv6:
                 self.log_emitter.server_addr_found.emit(ipv6)
-                self.log(f'服务端IPv6: {ipv6}', "info")
+                self.log(f'服务端IPv6: {ipv6}', 'info')
             
-            self.log(f'控制端口监听: [::]:{control_port}', "info")
+            self.log(f'控制端口监听: [::]:{control_port}', 'info')
             
             while self.running:
                 try:
@@ -365,10 +354,10 @@ class ServerThread(QThread):
                         continue
                         
                 except Exception as e:
-                    self.log(f'接受控制连接错误: {e}', "error")
+                    self.log(f'接受控制连接错误: {e}', 'error')
                     
         except Exception as e:
-            self.log(f'控制端口监听失败: {e}', "error")
+            self.log(f'控制端口监听失败: {e}', 'error')
         finally:
             try:
                 server_socket.close()
@@ -409,14 +398,13 @@ class ServerWindow(QMainWindow):
         
     def init_ui(self):
         self.setWindowTitle('IPv6 内网穿透 - 服务端')
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(700, 550)
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
         main_layout = QVBoxLayout(central_widget)
         
-        # 配置区域
         config_group = QGroupBox('配置')
         config_layout = QFormLayout()
         
@@ -440,8 +428,7 @@ class ServerWindow(QMainWindow):
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
         
-        # 服务器地址显示
-        addr_group = QGroupBox('服务器地址')
+        addr_group = QGroupBox('服务端地址')
         addr_layout = QHBoxLayout()
         
         self.server_addr_label = QLabel('启动后显示')
@@ -456,7 +443,6 @@ class ServerWindow(QMainWindow):
         addr_group.setLayout(addr_layout)
         main_layout.addWidget(addr_group)
         
-        # 控制按钮
         button_layout = QHBoxLayout()
         
         self.start_button = QPushButton('启动服务')
@@ -513,22 +499,19 @@ class ServerWindow(QMainWindow):
         
         main_layout.addLayout(button_layout)
         
-        # 已分配端口表格
         port_group = QGroupBox('已分配端口')
         port_layout = QVBoxLayout()
         
         self.port_table = QTableWidget()
-        self.port_table.setColumnCount(3)
-        self.port_table.setHorizontalHeaderLabels(['公网端口', '公网链接', '状态'])
-        self.port_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.port_table.setColumnCount(2)
+        self.port_table.setHorizontalHeaderLabels(['公网端口', '状态'])
+        self.port_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.port_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.port_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         port_layout.addWidget(self.port_table)
         
         port_group.setLayout(port_layout)
         main_layout.addWidget(port_group)
         
-        # 日志区域
         log_group = QGroupBox('日志')
         log_layout = QVBoxLayout()
         
@@ -540,7 +523,6 @@ class ServerWindow(QMainWindow):
         log_group.setLayout(log_layout)
         main_layout.addWidget(log_group)
         
-        # 状态标签
         self.status_label = QLabel('状态: 未启动')
         self.status_label.setStyleSheet('font-size: 12px; color: #666;')
         main_layout.addWidget(self.status_label)
@@ -554,7 +536,7 @@ class ServerWindow(QMainWindow):
                 self.port_start_input.setValue(config.get('port_start', 25565))
                 self.port_end_input.setValue(config.get('port_end', 65535))
             except Exception as e:
-                self.append_log(f'配置加载失败: {e}', "error")
+                self.append_log(f'配置加载失败: {e}', 'error')
                 
     def save_config(self):
         config = {
@@ -565,10 +547,10 @@ class ServerWindow(QMainWindow):
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            self.append_log('配置已保存', "success")
+            self.append_log('配置已保存', 'success')
         except Exception as e:
-            self.append_log(f'配置保存失败: {e}', "error")
-    
+            self.append_log(f'配置保存失败: {e}', 'error')
+            
     def on_server_addr_found(self, addr):
         self.server_addr = addr
         if ':' in addr and not addr.startswith('['):
@@ -578,33 +560,17 @@ class ServerWindow(QMainWindow):
         self.server_addr_label.setText(display_addr)
         self.server_addr_label.setStyleSheet('font-size: 12px; color: #4CAF50; font-weight: bold;')
         self.copy_addr_btn.setEnabled(True)
-    
+        
     def copy_server_addr(self):
         if not self.server_addr:
             return
         clipboard = QApplication.clipboard()
         clipboard.setText(self.server_addr)
-        self.append_log(f'已复制服务器地址: {self.server_addr}', "success")
-    
-    def copy_link(self, public_port):
-        if not self.server_addr:
-            self.append_log('服务端地址未获取到', "warning")
-            return
-        
-        if ':' in self.server_addr and self.server_addr.startswith('['):
-            link = f'{self.server_addr}:{public_port}'
-        elif ':' in self.server_addr:
-            link = f'[{self.server_addr}]:{public_port}'
-        else:
-            link = f'{self.server_addr}:{public_port}'
-        
-        clipboard = QApplication.clipboard()
-        clipboard.setText(link)
-        self.append_log(f'已复制链接: {link}', "success")
+        self.append_log(f'已复制服务器地址: {self.server_addr}', 'success')
             
     def start_server(self):
         if self.port_start_input.value() >= self.port_end_input.value():
-            self.append_log('端口范围设置错误', "error")
+            self.append_log('端口范围设置错误', 'error')
             return
             
         config = {
@@ -639,19 +605,13 @@ class ServerWindow(QMainWindow):
         self.server_addr_label.setStyleSheet('font-size: 12px; color: #666;')
         self.copy_addr_btn.setEnabled(False)
         self.port_table.setRowCount(0)
-        self.append_log('服务已停止', "warning")
+        self.append_log('服务已停止', 'warning')
         
     def add_port_to_table(self, public_port, status):
         row = self.port_table.rowCount()
         self.port_table.insertRow(row)
         self.port_table.setItem(row, 0, QTableWidgetItem(str(public_port)))
-        
-        # 链接按钮
-        copy_btn = QPushButton('复制链接')
-        copy_btn.clicked.connect(lambda: self.copy_link(public_port))
-        self.port_table.setCellWidget(row, 1, copy_btn)
-        
-        self.port_table.setItem(row, 2, QTableWidgetItem(status))
+        self.port_table.setItem(row, 1, QTableWidgetItem(status))
         
     def remove_port_from_table(self, public_port):
         for row in range(self.port_table.rowCount()):
@@ -665,7 +625,7 @@ class ServerWindow(QMainWindow):
             "info": "#333333",
             "success": "#4CAF50",
             "warning": "#FF9800",
-            "error": "#F44336"
+            "error": "#f44336"
         }
         color = color_map.get(level, "#333333")
         
@@ -684,5 +644,4 @@ def main():
 
 
 if __name__ == '__main__':
-    import time
     main()
