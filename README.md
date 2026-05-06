@@ -1,146 +1,82 @@
-# IPv6 远程桌面控制软件
+# IPv6 游戏联机中继服务器
 
-一个支持IPv6的现代化远程桌面控制应用，支持服务器中转和多人群组功能。
+一个简单高效的 IPv6 游戏联机中继服务器，帮助玩家建立游戏连接。
 
-## 功能特性
+## 功能特点
 
 - ✅ IPv6 原生支持
-- 🖥️ 远程桌面控制（鼠标、键盘）
-- 🔄 服务器中转连接
-- 👥 多人群组会话
-- 🎨 现代化深色主题UI
-- ⚙️ 可调节画质和帧率
-- 🚀 跨平台支持 (Windows/macOS/Linux)
-
-## 项目结构
-
-```
-.
-├── client/              # 客户端程序
-│   ├── main.py         # 主程序（UI界面）
-│   ├── network.py      # 网络通信模块
-│   ├── screen_capture.py # 屏幕捕获模块
-│   └── remote_control.py # 远程控制模块
-├── server/              # 服务器端程序
-│   └── server.py       # 中继服务器
-├── common/              # 共享模块
-│   ├── __init__.py
-│   └── protocol.py     # 通信协议定义
-├── requirements.txt     # 依赖包
-└── README.md           # 说明文档
-```
+- ✅ 房间/房间管理
+- ✅ 玩家加入/离开通知
+- ✅ 数据中继转发
+- ✅ 支持多种游戏协议
+- ✅ 轻量级高性能
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 运行服务器
 
 ```bash
-pip install -r requirements.txt
-```
-
-### 2. 启动服务器
-
-首先在一台有公网IPv6地址的机器上运行服务器：
-
-```bash
-cd server
 python server.py
 ```
 
-服务器默认监听 `[::]:8888`（所有IPv6地址的8888端口）。
+服务器默认监听端口：`3003`
 
-### 3. 运行客户端
+### 2. 配置
 
-在需要远程控制的机器上运行客户端：
+修改 `server.py` 中的配置：
+
+```python
+PORT = 3003          # 服务器端口
+MAX_ROOMS = 100       # 最大房间数
+MAX_PLAYERS_PER_ROOM = 10  # 每个房间最大玩家数
+```
+
+## 协议说明
+
+### 创建房间
+```
+CREATE_ROOM|room_id|room_name
+```
+
+### 加入房间
+```
+JOIN_ROOM|room_id|player_id|player_name
+```
+
+### 离开房间
+```
+LEAVE_ROOM|room_id|player_id
+```
+
+### 发送数据
+```
+SEND_DATA|room_id|player_id|data
+```
+
+### 广播消息
+```
+BROADCAST|room_id|player_id|message
+```
+
+## 部署
+
+### 使用 GitHub Actions 自动构建
+
+1. 创建 tag 触发构建：
+```bash
+git tag -a v1.0.0 -m "First Release"
+git push origin v1.0.0
+```
+
+2. 从 Releases 下载 exe 文件
+
+### 手动构建
 
 ```bash
-cd client
-python main.py
+pip install -r requirements.txt
+pyinstaller --clean server.spec
 ```
-
-## 使用说明
-
-### 连接服务器
-
-1. 在客户端界面输入服务器IPv6地址和端口
-2. 点击"连接"按钮
-3. 连接成功后，设置用户名和群组名称
-4. 点击"加入群组"
-
-### 分享屏幕
-
-1. 在在线用户列表中选择要分享给的用户
-2. 点击"分享屏幕"按钮
-3. 可以调节画质和FPS（1-60）以平衡质量和性能
-
-### 远程控制
-
-1. 在在线用户列表中选择要控制的用户（该用户需要正在分享屏幕）
-2. 点击"远程控制"按钮
-3. 在屏幕显示区域点击和移动鼠标，即可远程控制对方电脑
-
-### 断开连接
-
-点击"停止分享"或"停止控制"可以停止相应功能
-点击"断开"可以断开与服务器的连接
-
-## 技术栈
-
-- **UI框架**: PyQt6（现代化深色主题）
-- **网络通信**: IPv6 TCP Socket
-- **屏幕捕获**: mss（高性能跨平台屏幕捕获）
-- **图像处理**: Pillow（JPEG压缩）
-- **输入控制**: pynput（鼠标键盘控制）
-- **数据序列化**: JSON
-
-## 系统要求
-
-- Python 3.8+
-- PyQt6 6.0+
-- 支持IPv6的操作系统和网络环境
-
-## 注意事项
-
-1. 确保服务器和客户端都有IPv6网络连接
-2. 如果服务器在防火墙后面，需要开放相应端口
-3. 建议在局域网或低延迟网络中使用以获得更好体验
-4. 屏幕共享会占用较多带宽，可根据网络情况调节画质
-
-## 未来计划
-
-- [ ] 端到端加密
-- [ ] 文件传输功能
-- [ ] 多人同时控制
-- [ ] 屏幕录制
-- [ ] 音频传输
-
-## 📦 打包成EXE
-
-### 🎯 推荐方式：GitHub Actions 自动打包（最简单）
-
-无需 Windows 电脑，让 GitHub 帮你自动打包！详细说明请查看 [GITHUB.md](GITHUB.md)。
-
-**快速步骤：**
-1. 将代码推送到 GitHub
-2. 进入 Actions → Build EXE → Run workflow
-3. 几分钟后下载打包好的 exe 文件！
-
-### 💻 本地打包
-
-如果你想在本地打包，详细说明请查看 [BUILD.md](BUILD.md)。
-
-**Windows:**
-```cmd
-build.bat
-```
-
-**Linux/Mac:**
-```bash
-./build.sh
-```
-
-打包完成后，可执行文件位于 `dist` 目录中。
 
 ## 许可证
 
-本项目仅供学习和研究使用。
+MIT License

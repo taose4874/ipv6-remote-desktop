@@ -27,7 +27,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='IPv6RemoteDesktop_Server',
+    name='IPv6GameRelayServer',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
