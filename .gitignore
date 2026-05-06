@@ -1,7 +1,6 @@
 # 打包相关
 build/
 dist/
-*.spec
 
 # Python
 __pycache__/
