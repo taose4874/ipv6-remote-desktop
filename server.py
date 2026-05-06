@@ -32,7 +32,8 @@ BUFFER_SIZE = 4096
 DEFAULT_CONFIG = {
     "control_port": 7000,
     "port_start": 25565,
-    "port_end": 25665
+    "port_end": 65535,
+    "server_addr": ""
 }
 
 
@@ -97,7 +98,7 @@ class ServerThread(QThread):
                 except socket.timeout:
                     continue
         except Exception as e:
-            self.log(f'转发错误 [{name}]: {e}', "error")
+            pass
         finally:
             try:
                 src.close()
@@ -134,18 +135,14 @@ class ServerThread(QThread):
                     break
             
             if proxy_port is None:
-                self.log('隧道连接未收到proxy_port，关闭', "warning")
                 tunnel_socket.close()
                 return
             
             with self.lock:
                 if proxy_port not in self.pending_connections or not self.pending_connections[proxy_port]:
-                    self.log(f'没有待处理的连接，关闭隧道 (端口: {proxy_port})', "warning")
                     tunnel_socket.close()
                     return
                 game_socket = self.pending_connections[proxy_port].pop(0)
-            
-            self.log(f'建立隧道连接，端口: {proxy_port}', "info")
             
             thread1 = threading.Thread(target=self.forward_data, args=(game_socket, tunnel_socket, f'game->{proxy_port}'))
             thread2 = threading.Thread(target=self.forward_data, args=(tunnel_socket, game_socket, f'{proxy_port}->game'))
@@ -159,14 +156,11 @@ class ServerThread(QThread):
                 time.sleep(0.1)
             
         except Exception as e:
-            self.log(f'处理隧道连接错误: {e}', "error")
+            pass
             
     def handle_proxy_connection(self, game_socket, addr, proxy_port):
-        self.log(f'端口 {proxy_port} 收到连接: {addr[0]}:{addr[1]}', "info")
-        
         with self.lock:
             if not self.client_connected or self.client_control_socket is None:
-                self.log(f'客户端未连接，拒绝连接 (端口: {proxy_port})', "warning")
                 game_socket.close()
                 return
             
@@ -179,7 +173,6 @@ class ServerThread(QThread):
             self.client_control_socket.sendall((json.dumps(req_msg) + '\n').encode('utf-8'))
             
         except Exception as e:
-            self.log(f'发送连接请求错误: {e}', "error")
             game_socket.close()
             with self.lock:
                 if proxy_port in self.pending_connections and game_socket in self.pending_connections[proxy_port]:
@@ -394,6 +387,10 @@ class ServerWindow(QMainWindow):
         config_group = QGroupBox('配置')
         config_layout = QFormLayout()
         
+        self.server_addr_input = QLineEdit()
+        self.server_addr_input.setPlaceholderText('例如: 2001:db8::1 或 example.com')
+        config_layout.addRow('服务器地址:', self.server_addr_input)
+        
         self.control_port_input = QSpinBox()
         self.control_port_input.setRange(1, 65535)
         self.control_port_input.setValue(7000)
@@ -476,10 +473,11 @@ class ServerWindow(QMainWindow):
         port_layout = QVBoxLayout()
         
         self.port_table = QTableWidget()
-        self.port_table.setColumnCount(2)
-        self.port_table.setHorizontalHeaderLabels(['公网端口', '状态'])
-        self.port_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.port_table.setColumnCount(3)
+        self.port_table.setHorizontalHeaderLabels(['公网端口', '公网链接', '状态'])
+        self.port_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.port_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.port_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         port_layout.addWidget(self.port_table)
         
         port_group.setLayout(port_layout)
@@ -507,14 +505,16 @@ class ServerWindow(QMainWindow):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
+                self.server_addr_input.setText(config.get('server_addr', ''))
                 self.control_port_input.setValue(config.get('control_port', 7000))
                 self.port_start_input.setValue(config.get('port_start', 25565))
-                self.port_end_input.setValue(config.get('port_end', 25665))
+                self.port_end_input.setValue(config.get('port_end', 65535))
             except Exception as e:
                 self.append_log(f'配置加载失败: {e}', "error")
                 
     def save_config(self):
         config = {
+            "server_addr": self.server_addr_input.text(),
             "control_port": self.control_port_input.value(),
             "port_start": self.port_start_input.value(),
             "port_end": self.port_end_input.value()
@@ -525,6 +525,23 @@ class ServerWindow(QMainWindow):
             self.append_log('配置已保存', "success")
         except Exception as e:
             self.append_log(f'配置保存失败: {e}', "error")
+    
+    def copy_link(self, public_port):
+        server_addr = self.server_addr_input.text().strip()
+        if not server_addr:
+            self.append_log('请先设置服务器地址', "warning")
+            return
+        
+        if ':' in server_addr and server_addr.startswith('['):
+            link = f'{server_addr}:{public_port}'
+        elif ':' in server_addr:
+            link = f'[{server_addr}]:{public_port}'
+        else:
+            link = f'{server_addr}:{public_port}'
+        
+        clipboard = QApplication.clipboard()
+        clipboard.setText(link)
+        self.append_log(f'已复制链接: {link}', "success")
             
     def start_server(self):
         if self.port_start_input.value() >= self.port_end_input.value():
@@ -541,6 +558,7 @@ class ServerWindow(QMainWindow):
         
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
+        self.server_addr_input.setEnabled(False)
         self.control_port_input.setEnabled(False)
         self.port_start_input.setEnabled(False)
         self.port_end_input.setEnabled(False)
@@ -554,6 +572,7 @@ class ServerWindow(QMainWindow):
             
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+        self.server_addr_input.setEnabled(True)
         self.control_port_input.setEnabled(True)
         self.port_start_input.setEnabled(True)
         self.port_end_input.setEnabled(True)
@@ -566,7 +585,13 @@ class ServerWindow(QMainWindow):
         row = self.port_table.rowCount()
         self.port_table.insertRow(row)
         self.port_table.setItem(row, 0, QTableWidgetItem(str(public_port)))
-        self.port_table.setItem(row, 1, QTableWidgetItem(status))
+        
+        # 链接按钮
+        copy_btn = QPushButton('复制链接')
+        copy_btn.clicked.connect(lambda: self.copy_link(public_port))
+        self.port_table.setCellWidget(row, 1, copy_btn)
+        
+        self.port_table.setItem(row, 2, QTableWidgetItem(status))
         
     def remove_port_from_table(self, public_port):
         for row in range(self.port_table.rowCount()):
