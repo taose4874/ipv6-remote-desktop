@@ -1,10 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
+import os
 
 block_cipher = None
 
+# 获取项目根目录的绝对路径
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
+
 a = Analysis(
     ['client/main.py'],
-    pathex=[],
+    pathex=[root_path],
     binaries=[],
     datas=[],
     hiddenimports=[
@@ -14,9 +19,12 @@ a = Analysis(
         'PyQt6.QtWidgets',
         'mss',
         'PIL',
+        'PIL.Image',
         'pynput',
         'pynput.keyboard',
         'pynput.mouse',
+        'common',
+        'common.protocol',
     ],
     hookspath=[],
     hooksconfig={},

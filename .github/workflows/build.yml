@@ -28,28 +28,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           
-      - name: Show directory structure
+      - name: Prepare common module for client
         run: |
-          dir
-          
-      - name: Build Server
-        run: |
-          pyinstaller --clean server.spec
-          
-      - name: Check dist directory
-        run: |
-          dir dist
+          mkdir -p client/common
+          copy common\*.py client\common\
           
       - name: Build Client
         run: |
           pyinstaller --clean client.spec
-          
-      - name: Upload Server EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: IPv6RemoteDesktop-Server
-          path: dist/IPv6RemoteDesktop_Server.exe
-          if-no-files-found: error
           
       - name: Upload Client EXE
         uses: actions/upload-artifact@v4
