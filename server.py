@@ -11,9 +11,9 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QTextEdit, QGroupBox, QFormLayout, QSpinBox,
-                             QMessageBox, QSplitter)
+                             QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
-from PyQt6.QtGui import QFont, QTextCharFormat, QColor
+from PyQt6.QtGui import QFont, QColor
 
 
 def get_config_path(filename):
@@ -31,7 +31,7 @@ BUFFER_SIZE = 4096
 
 DEFAULT_CONFIG = {
     "control_port": 7000,
-    "listen_port": 25565
+    "proxy_ports": [25565]
 }
 
 
@@ -41,6 +41,8 @@ def get_timestamp():
 
 class LogEmitter(QObject):
     log_signal = pyqtSignal(str, str)
+    proxy_added = pyqtSignal(int, int)
+    proxy_removed = pyqtSignal(int)
 
 
 class ServerThread(QThread):
@@ -51,8 +53,10 @@ class ServerThread(QThread):
         self.running = False
         self.client_control_socket = None
         self.client_connected = False
-        self.pending_connection = None
         self.lock = threading.Lock()
+        self.proxy_listeners = {}
+        self.pending_connections = {}
+        self.pending_tunnels = {}
         
     def log(self, message, level="info"):
         self.log_emitter.log_signal.emit(message, level)
@@ -81,49 +85,81 @@ class ServerThread(QThread):
                 pass
                 
     def handle_tunnel_connection(self, tunnel_socket, addr):
-        with self.lock:
-            if self.pending_connection is None:
-                self.log('没有待处理的连接，关闭隧道', "warning")
+        try:
+            tunnel_socket.settimeout(5.0)
+            buffer = ''
+            proxy_port = None
+            
+            while self.running:
+                try:
+                    data = tunnel_socket.recv(BUFFER_SIZE)
+                    if not data:
+                        break
+                    
+                    buffer += data.decode('utf-8', errors='ignore')
+                    if '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        try:
+                            msg = json.loads(line)
+                            if msg.get('type') == 'TUNNEL_READY':
+                                proxy_port = msg.get('proxy_port')
+                                break
+                        except:
+                            pass
+                except socket.timeout:
+                    break
+            
+            if proxy_port is None:
+                self.log('隧道连接未收到proxy_port，关闭', "warning")
                 tunnel_socket.close()
                 return
-            game_socket = self.pending_connection
-            self.pending_connection = None
             
-        try:
-            thread1 = threading.Thread(target=self.forward_data, args=(game_socket, tunnel_socket, 'game->tunnel'))
-            thread2 = threading.Thread(target=self.forward_data, args=(tunnel_socket, game_socket, 'tunnel->game'))
+            with self.lock:
+                if proxy_port not in self.pending_connections or not self.pending_connections[proxy_port]:
+                    self.log(f'没有待处理的连接，关闭隧道 (端口: {proxy_port})', "warning")
+                    tunnel_socket.close()
+                    return
+                game_socket = self.pending_connections[proxy_port].pop(0)
+            
+            self.log(f'建立隧道连接，端口: {proxy_port}', "info")
+            
+            thread1 = threading.Thread(target=self.forward_data, args=(game_socket, tunnel_socket, f'game->{proxy_port}'))
+            thread2 = threading.Thread(target=self.forward_data, args=(tunnel_socket, game_socket, f'{proxy_port}->game'))
             
             thread1.daemon = True
             thread2.daemon = True
             thread1.start()
             thread2.start()
             
-            # 不使用join()无限等待，而是定期检查是否需要停止
             while self.running and (thread1.is_alive() or thread2.is_alive()):
                 time.sleep(0.1)
             
         except Exception as e:
             self.log(f'处理隧道连接错误: {e}', "error")
             
-    def handle_game_connection(self, game_socket, addr):
-        self.log(f'游戏连接来自: {addr[0]}:{addr[1]}', "info")
+    def handle_proxy_connection(self, game_socket, addr, proxy_port):
+        self.log(f'端口 {proxy_port} 收到连接: {addr[0]}:{addr[1]}', "info")
         
         with self.lock:
             if not self.client_connected or self.client_control_socket is None:
-                self.log('客户端未连接，拒绝游戏连接', "warning")
+                self.log(f'客户端未连接，拒绝连接 (端口: {proxy_port})', "warning")
                 game_socket.close()
                 return
-            self.pending_connection = game_socket
+            
+            if proxy_port not in self.pending_connections:
+                self.pending_connections[proxy_port] = []
+            self.pending_connections[proxy_port].append(game_socket)
             
         try:
-            req_msg = {'type': 'NEW_CONNECTION'}
+            req_msg = {'type': 'NEW_CONNECTION', 'proxy_port': proxy_port}
             self.client_control_socket.sendall((json.dumps(req_msg) + '\n').encode('utf-8'))
             
         except Exception as e:
             self.log(f'发送连接请求错误: {e}', "error")
             game_socket.close()
             with self.lock:
-                self.pending_connection = None
+                if proxy_port in self.pending_connections and game_socket in self.pending_connections[proxy_port]:
+                    self.pending_connections[proxy_port].remove(game_socket)
                 
     def handle_client_control(self, conn, addr):
         self.log(f'客户端连接: {addr[0]}:{addr[1]}', "success")
@@ -134,11 +170,29 @@ class ServerThread(QThread):
             
         try:
             conn.settimeout(2.0)
+            buffer = ''
             while self.running:
                 try:
                     data = conn.recv(BUFFER_SIZE)
                     if not data:
                         break
+                        
+                    buffer += data.decode('utf-8', errors='ignore')
+                        
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                            
+                        try:
+                            msg = json.loads(line)
+                            if msg.get('type') == 'REGISTER_PROXIES':
+                                proxy_ports = msg.get('proxy_ports', [])
+                                self.log(f'客户端注册端口: {proxy_ports}', "info")
+                                self.start_proxy_listeners(proxy_ports)
+                        except Exception as e:
+                            self.log(f'处理消息错误: {e}', "error")
                 except socket.timeout:
                     continue
                     
@@ -148,6 +202,7 @@ class ServerThread(QThread):
             with self.lock:
                 self.client_control_socket = None
                 self.client_connected = False
+                self.stop_all_proxy_listeners()
             
             try:
                 conn.close()
@@ -156,40 +211,62 @@ class ServerThread(QThread):
             
             self.log(f'客户端断开: {addr[0]}', "warning")
             
-    def start_game_listener(self, listen_port):
-        listen_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-        listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listen_socket.settimeout(1.0)
+    def start_proxy_listener(self, proxy_port):
+        if proxy_port in self.proxy_listeners:
+            return
+            
+        listener_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        listener_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener_socket.settimeout(1.0)
         
         try:
-            listen_socket.bind(('::', listen_port))
-            listen_socket.listen(128)
+            listener_socket.bind(('::', proxy_port))
+            listener_socket.listen(128)
+            self.proxy_listeners[proxy_port] = listener_socket
+            self.log(f'开始监听端口: {proxy_port}', "info")
+            self.log_emitter.proxy_added.emit(proxy_port, proxy_port)
             
-            self.log(f'游戏端口监听: [::]:{listen_port}', "info")
-            
-            while self.running:
-                try:
+            def listen_thread():
+                while self.running and proxy_port in self.proxy_listeners:
                     try:
-                        game_socket, addr = listen_socket.accept()
-                        game_thread = threading.Thread(
-                            target=self.handle_game_connection,
-                            args=(game_socket, addr)
-                        )
-                        game_thread.daemon = True
-                        game_thread.start()
-                    except socket.timeout:
-                        continue
+                        try:
+                            game_socket, addr = listener_socket.accept()
+                            thread = threading.Thread(
+                                target=self.handle_proxy_connection,
+                                args=(game_socket, addr, proxy_port)
+                            )
+                            thread.daemon = True
+                            thread.start()
+                        except socket.timeout:
+                            continue
+                    except Exception as e:
+                        self.log(f'端口 {proxy_port} 监听错误: {e}', "error")
+                        break
+                        
+                try:
+                    listener_socket.close()
+                except:
+                    pass
                     
-                except Exception as e:
-                    self.log(f'接受游戏连接错误: {e}', "error")
-                    
+            thread = threading.Thread(target=listen_thread)
+            thread.daemon = True
+            thread.start()
+            
         except Exception as e:
-            self.log(f'游戏端口监听失败: {e}', "error")
-        finally:
+            self.log(f'监听端口 {proxy_port} 失败: {e}', "error")
+            
+    def start_proxy_listeners(self, proxy_ports):
+        for port in proxy_ports:
+            self.start_proxy_listener(port)
+            
+    def stop_all_proxy_listeners(self):
+        for port in list(self.proxy_listeners.keys()):
             try:
-                listen_socket.close()
+                self.proxy_listeners[port].close()
             except:
                 pass
+            self.log_emitter.proxy_removed.emit(port)
+        self.proxy_listeners.clear()
             
     def start_control_listener(self, control_port):
         server_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
@@ -239,21 +316,17 @@ class ServerThread(QThread):
     def run(self):
         self.running = True
         control_port = self.config.get('control_port', 7000)
-        listen_port = self.config.get('listen_port', 25565)
         
         control_thread = threading.Thread(target=self.start_control_listener, args=(control_port,))
         control_thread.daemon = True
         control_thread.start()
-        
-        game_thread = threading.Thread(target=self.start_game_listener, args=(listen_port,))
-        game_thread.daemon = True
-        game_thread.start()
         
         while self.running:
             self.msleep(100)
             
     def stop(self):
         self.running = False
+        self.stop_all_proxy_listeners()
         self.wait()
 
 
@@ -263,12 +336,14 @@ class ServerWindow(QMainWindow):
         self.server_thread = None
         self.log_emitter = LogEmitter()
         self.log_emitter.log_signal.connect(self.append_log)
+        self.log_emitter.proxy_added.connect(self.add_proxy_to_table)
+        self.log_emitter.proxy_removed.connect(self.remove_proxy_from_table)
         self.init_ui()
         self.load_config()
         
     def init_ui(self):
-        self.setWindowTitle('IPv6 内网穿透 - 服务器端')
-        self.setMinimumSize(800, 600)
+        self.setWindowTitle('IPv6 内网穿透 - 服务器端 (类似FRP)')
+        self.setMinimumSize(900, 600)
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -283,11 +358,6 @@ class ServerWindow(QMainWindow):
         self.control_port_input.setRange(1, 65535)
         self.control_port_input.setValue(7000)
         config_layout.addRow('控制端口:', self.control_port_input)
-        
-        self.listen_port_input = QSpinBox()
-        self.listen_port_input.setRange(1, 65535)
-        self.listen_port_input.setValue(25565)
-        config_layout.addRow('游戏端口:', self.listen_port_input)
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
@@ -349,6 +419,20 @@ class ServerWindow(QMainWindow):
         
         main_layout.addLayout(button_layout)
         
+        # 代理端口表格
+        proxy_group = QGroupBox('代理端口')
+        proxy_layout = QVBoxLayout()
+        
+        self.proxy_table = QTableWidget()
+        self.proxy_table.setColumnCount(2)
+        self.proxy_table.setHorizontalHeaderLabels(['公网端口', '状态'])
+        self.proxy_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.proxy_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        proxy_layout.addWidget(self.proxy_table)
+        
+        proxy_group.setLayout(proxy_layout)
+        main_layout.addWidget(proxy_group)
+        
         # 日志区域
         log_group = QGroupBox('日志')
         log_layout = QVBoxLayout()
@@ -372,14 +456,13 @@ class ServerWindow(QMainWindow):
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                 self.control_port_input.setValue(config.get('control_port', 7000))
-                self.listen_port_input.setValue(config.get('listen_port', 25565))
             except Exception as e:
                 self.append_log(f'配置加载失败: {e}', "error")
                 
     def save_config(self):
         config = {
             "control_port": self.control_port_input.value(),
-            "listen_port": self.listen_port_input.value()
+            "proxy_ports": []
         }
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -390,8 +473,7 @@ class ServerWindow(QMainWindow):
             
     def start_server(self):
         config = {
-            "control_port": self.control_port_input.value(),
-            "listen_port": self.listen_port_input.value()
+            "control_port": self.control_port_input.value()
         }
         self.server_thread = ServerThread(config, self.log_emitter)
         self.server_thread.start()
@@ -399,7 +481,6 @@ class ServerWindow(QMainWindow):
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.control_port_input.setEnabled(False)
-        self.listen_port_input.setEnabled(False)
         self.status_label.setText('状态: 运行中')
         self.status_label.setStyleSheet('font-size: 12px; color: #4CAF50; font-weight: bold;')
         
@@ -411,10 +492,22 @@ class ServerWindow(QMainWindow):
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.control_port_input.setEnabled(True)
-        self.listen_port_input.setEnabled(True)
         self.status_label.setText('状态: 已停止')
         self.status_label.setStyleSheet('font-size: 12px; color: #666;')
+        self.proxy_table.setRowCount(0)
         self.append_log('服务已停止', "warning")
+        
+    def add_proxy_to_table(self, public_port, local_port):
+        row = self.proxy_table.rowCount()
+        self.proxy_table.insertRow(row)
+        self.proxy_table.setItem(row, 0, QTableWidgetItem(str(public_port)))
+        self.proxy_table.setItem(row, 1, QTableWidgetItem('监听中'))
+        
+    def remove_proxy_from_table(self, public_port):
+        for row in range(self.proxy_table.rowCount()):
+            if self.proxy_table.item(row, 0).text() == str(public_port):
+                self.proxy_table.removeRow(row)
+                break
         
     def append_log(self, message, level="info"):
         timestamp = get_timestamp()
@@ -428,7 +521,7 @@ class ServerWindow(QMainWindow):
         
         html = f'<span style="color:#999;">[{timestamp}]</span> <span style="color:{color};">{message}</span>'
         self.log_text.append(html)
-        
+
 
 def main():
     app = QApplication(sys.argv)
@@ -441,4 +534,5 @@ def main():
 
 
 if __name__ == '__main__':
+    import time
     main()
