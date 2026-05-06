@@ -32,8 +32,7 @@ BUFFER_SIZE = 4096
 DEFAULT_CONFIG = {
     "control_port": 7000,
     "port_start": 25565,
-    "port_end": 65535,
-    "server_addr": ""
+    "port_end": 65535
 }
 
 
@@ -45,6 +44,7 @@ class LogEmitter(QObject):
     log_signal = pyqtSignal(str, str)
     port_added = pyqtSignal(int, str)
     port_removed = pyqtSignal(int)
+    server_addr_found = pyqtSignal(str)
 
 
 class ServerThread(QThread):
@@ -299,6 +299,31 @@ class ServerThread(QThread):
                 pass
             del self.proxy_listeners[proxy_port]
             
+    def get_local_ipv6(self):
+        try:
+            hostname = socket.gethostname()
+            addrs = socket.getaddrinfo(hostname, None, socket.AF_INET6)
+            for addr in addrs:
+                ip = addr[4][0]
+                # 忽略本地回环和链路本地地址
+                if not ip.startswith('::1') and not ip.startswith('fe80:'):
+                    return ip
+        except Exception as e:
+            pass
+        
+        # 尝试连接到一个外部地址来获取本地IP
+        try:
+            s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            s.connect(('2001:4860:4860::8888', 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith('::1') and not ip.startswith('fe80:'):
+                return ip
+        except Exception as e:
+            pass
+        
+        return None
+    
     def start_control_listener(self, control_port):
         server_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -307,6 +332,12 @@ class ServerThread(QThread):
         try:
             server_socket.bind(('::', control_port))
             server_socket.listen(128)
+            
+            # 获取本地IPv6
+            ipv6 = self.get_local_ipv6()
+            if ipv6:
+                self.log_emitter.server_addr_found.emit(ipv6)
+                self.log(f'服务端IPv6: {ipv6}', "info")
             
             self.log(f'控制端口监听: [::]:{control_port}', "info")
             
@@ -371,6 +402,8 @@ class ServerWindow(QMainWindow):
         self.log_emitter.log_signal.connect(self.append_log)
         self.log_emitter.port_added.connect(self.add_port_to_table)
         self.log_emitter.port_removed.connect(self.remove_port_from_table)
+        self.log_emitter.server_addr_found.connect(self.on_server_addr_found)
+        self.server_addr = ""
         self.init_ui()
         self.load_config()
         
@@ -386,10 +419,6 @@ class ServerWindow(QMainWindow):
         # 配置区域
         config_group = QGroupBox('配置')
         config_layout = QFormLayout()
-        
-        self.server_addr_input = QLineEdit()
-        self.server_addr_input.setPlaceholderText('例如: 2001:db8::1 或 example.com')
-        config_layout.addRow('服务器地址:', self.server_addr_input)
         
         self.control_port_input = QSpinBox()
         self.control_port_input.setRange(1, 65535)
@@ -410,6 +439,22 @@ class ServerWindow(QMainWindow):
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
+        
+        # 服务器地址显示
+        addr_group = QGroupBox('服务器地址')
+        addr_layout = QHBoxLayout()
+        
+        self.server_addr_label = QLabel('启动后显示')
+        self.server_addr_label.setStyleSheet('font-size: 12px; color: #666;')
+        addr_layout.addWidget(self.server_addr_label)
+        
+        self.copy_addr_btn = QPushButton('复制地址')
+        self.copy_addr_btn.clicked.connect(self.copy_server_addr)
+        self.copy_addr_btn.setEnabled(False)
+        addr_layout.addWidget(self.copy_addr_btn)
+        
+        addr_group.setLayout(addr_layout)
+        main_layout.addWidget(addr_group)
         
         # 控制按钮
         button_layout = QHBoxLayout()
@@ -505,7 +550,6 @@ class ServerWindow(QMainWindow):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                self.server_addr_input.setText(config.get('server_addr', ''))
                 self.control_port_input.setValue(config.get('control_port', 7000))
                 self.port_start_input.setValue(config.get('port_start', 25565))
                 self.port_end_input.setValue(config.get('port_end', 65535))
@@ -514,7 +558,6 @@ class ServerWindow(QMainWindow):
                 
     def save_config(self):
         config = {
-            "server_addr": self.server_addr_input.text(),
             "control_port": self.control_port_input.value(),
             "port_start": self.port_start_input.value(),
             "port_end": self.port_end_input.value()
@@ -526,18 +569,34 @@ class ServerWindow(QMainWindow):
         except Exception as e:
             self.append_log(f'配置保存失败: {e}', "error")
     
+    def on_server_addr_found(self, addr):
+        self.server_addr = addr
+        if ':' in addr and not addr.startswith('['):
+            display_addr = f'[{addr}]'
+        else:
+            display_addr = addr
+        self.server_addr_label.setText(display_addr)
+        self.server_addr_label.setStyleSheet('font-size: 12px; color: #4CAF50; font-weight: bold;')
+        self.copy_addr_btn.setEnabled(True)
+    
+    def copy_server_addr(self):
+        if not self.server_addr:
+            return
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self.server_addr)
+        self.append_log(f'已复制服务器地址: {self.server_addr}', "success")
+    
     def copy_link(self, public_port):
-        server_addr = self.server_addr_input.text().strip()
-        if not server_addr:
-            self.append_log('请先设置服务器地址', "warning")
+        if not self.server_addr:
+            self.append_log('服务端地址未获取到', "warning")
             return
         
-        if ':' in server_addr and server_addr.startswith('['):
-            link = f'{server_addr}:{public_port}'
-        elif ':' in server_addr:
-            link = f'[{server_addr}]:{public_port}'
+        if ':' in self.server_addr and self.server_addr.startswith('['):
+            link = f'{self.server_addr}:{public_port}'
+        elif ':' in self.server_addr:
+            link = f'[{self.server_addr}]:{public_port}'
         else:
-            link = f'{server_addr}:{public_port}'
+            link = f'{self.server_addr}:{public_port}'
         
         clipboard = QApplication.clipboard()
         clipboard.setText(link)
@@ -558,7 +617,6 @@ class ServerWindow(QMainWindow):
         
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        self.server_addr_input.setEnabled(False)
         self.control_port_input.setEnabled(False)
         self.port_start_input.setEnabled(False)
         self.port_end_input.setEnabled(False)
@@ -572,12 +630,14 @@ class ServerWindow(QMainWindow):
             
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
-        self.server_addr_input.setEnabled(True)
         self.control_port_input.setEnabled(True)
         self.port_start_input.setEnabled(True)
         self.port_end_input.setEnabled(True)
         self.status_label.setText('状态: 已停止')
         self.status_label.setStyleSheet('font-size: 12px; color: #666;')
+        self.server_addr_label.setText('启动后显示')
+        self.server_addr_label.setStyleSheet('font-size: 12px; color: #666;')
+        self.copy_addr_btn.setEnabled(False)
         self.port_table.setRowCount(0)
         self.append_log('服务已停止', "warning")
         
