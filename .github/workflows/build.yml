@@ -53,7 +53,7 @@ jobs:
 
       - name: Build Client
         run: |
-          pyinstaller --clean client.spec --debug=all 2>&1
+          pyinstaller --clean client.spec
           if (Test-Path "dist\IPv6RemoteDesktop_Client.exe") { Write-Host "Client built successfully" }
 
       - name: Check dist directory
