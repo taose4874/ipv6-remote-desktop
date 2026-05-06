@@ -1,4 +1,4 @@
-name: Build EXE
+name: Build and Release EXE
 
 on:
   push:
@@ -8,6 +8,9 @@ on:
   release:
     types: [ created ]
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -15,7 +18,8 @@ env:
 jobs:
   build:
     runs-on: windows-latest
-
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'release'
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -31,10 +35,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip list
-
-      - name: Show directory structure
-        run: |
-          Get-ChildItem -Recurse
 
       - name: Prepare common module for server
         run: |
@@ -56,27 +56,28 @@ jobs:
           pyinstaller --clean client.spec
           if (Test-Path "dist\IPv6RemoteDesktop_Client.exe") { Write-Host "Client built successfully" }
 
-      - name: Check dist directory
-        run: |
-          Get-ChildItem dist
-
-      - name: Upload Server EXE
+      - name: Upload EXE files
         uses: actions/upload-artifact@v4
         with:
-          name: IPv6RemoteDesktop-Server
-          path: dist/IPv6RemoteDesktop_Server.exe
-          if-no-files-found: warn
-
-      - name: Upload Client EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: IPv6RemoteDesktop-Client
-          path: dist/IPv6RemoteDesktop_Client.exe
-          if-no-files-found: warn
-
-      - name: Upload both EXEs together
-        uses: actions/upload-artifact@v4
-        with:
-          name: IPv6RemoteDesktop-All
+          name: IPv6RemoteDesktop-EXE
           path: dist/*.exe
-          if-no-files-found: warn
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Download EXE files
+        uses: actions/download-artifact@v4
+        with:
+          name: IPv6RemoteDesktop-EXE
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
