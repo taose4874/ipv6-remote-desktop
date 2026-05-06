@@ -18,13 +18,14 @@ from PyQt6.QtGui import QFont, QColor
 
 
 def get_config_path(filename):
-    if sys.platform == 'win32':
-        config_dir = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
+    # 获取程序所在目录
+    if getattr(sys, 'frozen', False):
+        # 打包后的exe程序
+        program_dir = Path(sys.executable).parent
     else:
-        config_dir = Path.home() / '.config'
-    app_dir = config_dir / 'IPv6Proxy'
-    app_dir.mkdir(parents=True, exist_ok=True)
-    return str(app_dir / filename)
+        # 开发环境下的脚本文件
+        program_dir = Path(__file__).parent
+    return str(program_dir / filename)
 
 
 CONFIG_FILE = get_config_path('config_server.json')
