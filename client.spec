@@ -4,12 +4,9 @@ import os
 
 block_cipher = None
 
-# 获取项目根目录的绝对路径
-root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
-
 a = Analysis(
     ['client/main.py'],
-    pathex=[root_path],
+    pathex=[],
     binaries=[],
     datas=[],
     hiddenimports=[
