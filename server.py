@@ -83,11 +83,12 @@ class ServerThread(QThread):
             return port
             
     def release_port(self, port):
+        import random
         with self.lock:
             if port in self.assigned_ports:
                 del self.assigned_ports[port]
                 self.available_ports.append(port)
-                self.available_ports.sort()
+                random.shuffle(self.available_ports)
                 self.log_emitter.port_removed.emit(port)
                 
     def get_local_ipv6(self):
