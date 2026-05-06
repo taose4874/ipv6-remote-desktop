@@ -402,11 +402,13 @@ class ServerWindow(QMainWindow):
         self.port_start_input = QSpinBox()
         self.port_start_input.setRange(1, 65535)
         self.port_start_input.setValue(25565)
+        self.port_start_input.setMinimumWidth(100)
         config_layout.addRow('端口起始:', self.port_start_input)
         
         self.port_end_input = QSpinBox()
         self.port_end_input.setRange(1, 65535)
-        self.port_end_input.setValue(25665)
+        self.port_end_input.setValue(65535)
+        self.port_end_input.setMinimumWidth(100)
         config_layout.addRow('端口结束:', self.port_end_input)
         
         config_group.setLayout(config_layout)
