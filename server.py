@@ -11,7 +11,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QTextEdit, QGroupBox, QFormLayout, QSpinBox,
-                             QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView)
+                             QTableWidget, QTableWidgetItem, QHeaderView)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QFont, QColor
 
@@ -31,7 +31,8 @@ BUFFER_SIZE = 4096
 
 DEFAULT_CONFIG = {
     "control_port": 7000,
-    "proxy_ports": [25565]
+    "port_start": 25565,
+    "port_end": 25665
 }
 
 
@@ -41,8 +42,8 @@ def get_timestamp():
 
 class LogEmitter(QObject):
     log_signal = pyqtSignal(str, str)
-    proxy_added = pyqtSignal(int, int)
-    proxy_removed = pyqtSignal(int)
+    port_added = pyqtSignal(int, str)
+    port_removed = pyqtSignal(int)
 
 
 class ServerThread(QThread):
@@ -54,13 +55,36 @@ class ServerThread(QThread):
         self.client_control_socket = None
         self.client_connected = False
         self.lock = threading.Lock()
+        self.assigned_ports = {}
+        self.available_ports = []
         self.proxy_listeners = {}
         self.pending_connections = {}
-        self.pending_tunnels = {}
         
     def log(self, message, level="info"):
         self.log_emitter.log_signal.emit(message, level)
         
+    def init_ports(self):
+        port_start = self.config.get('port_start', 25565)
+        port_end = self.config.get('port_end', 25665)
+        self.available_ports = list(range(port_start, port_end + 1))
+        self.log(f'可用端口范围: {port_start} - {port_end}, 共 {len(self.available_ports)} 个端口', "info")
+        
+    def allocate_port(self):
+        with self.lock:
+            if not self.available_ports:
+                return None
+            port = self.available_ports.pop(0)
+            self.assigned_ports[port] = {'status': '空闲', 'client': None}
+            return port
+            
+    def release_port(self, port):
+        with self.lock:
+            if port in self.assigned_ports:
+                del self.assigned_ports[port]
+                self.available_ports.append(port)
+                self.available_ports.sort()
+                self.log_emitter.port_removed.emit(port)
+                
     def forward_data(self, src, dst, name):
         try:
             src.settimeout(2.0)
@@ -187,10 +211,26 @@ class ServerThread(QThread):
                             
                         try:
                             msg = json.loads(line)
-                            if msg.get('type') == 'REGISTER_PROXIES':
-                                proxy_ports = msg.get('proxy_ports', [])
-                                self.log(f'客户端注册端口: {proxy_ports}', "info")
-                                self.start_proxy_listeners(proxy_ports)
+                            if msg.get('type') == 'REQUEST_PORT':
+                                local_port = msg.get('local_port')
+                                self.log(f'收到端口请求，本地端口: {local_port}', "info")
+                                
+                                public_port = self.allocate_port()
+                                if public_port:
+                                    self.log(f'分配端口: {public_port}', "success")
+                                    self.assigned_ports[public_port]['status'] = '已分配'
+                                    self.assigned_ports[public_port]['client'] = f'{addr[0]}:{addr[1]}'
+                                    self.log_emitter.port_added.emit(public_port, '已分配')
+                                    
+                                    resp_msg = {'type': 'PORT_ALLOCATED', 'public_port': public_port}
+                                    conn.sendall((json.dumps(resp_msg) + '\n').encode('utf-8'))
+                                    
+                                    self.start_proxy_listener(public_port)
+                                else:
+                                    self.log('没有可用端口', "error")
+                                    resp_msg = {'type': 'PORT_ERROR', 'message': '没有可用端口'}
+                                    conn.sendall((json.dumps(resp_msg) + '\n').encode('utf-8'))
+                                    
                         except Exception as e:
                             self.log(f'处理消息错误: {e}', "error")
                 except socket.timeout:
@@ -202,7 +242,10 @@ class ServerThread(QThread):
             with self.lock:
                 self.client_control_socket = None
                 self.client_connected = False
-                self.stop_all_proxy_listeners()
+            
+            for port in list(self.assigned_ports.keys()):
+                self.release_port(port)
+                self.stop_proxy_listener(port)
             
             try:
                 conn.close()
@@ -224,7 +267,6 @@ class ServerThread(QThread):
             listener_socket.listen(128)
             self.proxy_listeners[proxy_port] = listener_socket
             self.log(f'开始监听端口: {proxy_port}', "info")
-            self.log_emitter.proxy_added.emit(proxy_port, proxy_port)
             
             def listen_thread():
                 while self.running and proxy_port in self.proxy_listeners:
@@ -254,19 +296,15 @@ class ServerThread(QThread):
             
         except Exception as e:
             self.log(f'监听端口 {proxy_port} 失败: {e}', "error")
+            self.release_port(proxy_port)
             
-    def start_proxy_listeners(self, proxy_ports):
-        for port in proxy_ports:
-            self.start_proxy_listener(port)
-            
-    def stop_all_proxy_listeners(self):
-        for port in list(self.proxy_listeners.keys()):
+    def stop_proxy_listener(self, proxy_port):
+        if proxy_port in self.proxy_listeners:
             try:
-                self.proxy_listeners[port].close()
+                self.proxy_listeners[proxy_port].close()
             except:
                 pass
-            self.log_emitter.proxy_removed.emit(port)
-        self.proxy_listeners.clear()
+            del self.proxy_listeners[proxy_port]
             
     def start_control_listener(self, control_port):
         server_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
@@ -315,6 +353,7 @@ class ServerThread(QThread):
             
     def run(self):
         self.running = True
+        self.init_ports()
         control_port = self.config.get('control_port', 7000)
         
         control_thread = threading.Thread(target=self.start_control_listener, args=(control_port,))
@@ -326,7 +365,8 @@ class ServerThread(QThread):
             
     def stop(self):
         self.running = False
-        self.stop_all_proxy_listeners()
+        for port in list(self.proxy_listeners.keys()):
+            self.stop_proxy_listener(port)
         self.wait()
 
 
@@ -336,14 +376,14 @@ class ServerWindow(QMainWindow):
         self.server_thread = None
         self.log_emitter = LogEmitter()
         self.log_emitter.log_signal.connect(self.append_log)
-        self.log_emitter.proxy_added.connect(self.add_proxy_to_table)
-        self.log_emitter.proxy_removed.connect(self.remove_proxy_from_table)
+        self.log_emitter.port_added.connect(self.add_port_to_table)
+        self.log_emitter.port_removed.connect(self.remove_port_from_table)
         self.init_ui()
         self.load_config()
         
     def init_ui(self):
-        self.setWindowTitle('IPv6 内网穿透 - 服务器端 (类似FRP)')
-        self.setMinimumSize(900, 600)
+        self.setWindowTitle('IPv6 内网穿透 - 服务端')
+        self.setMinimumSize(800, 600)
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -358,6 +398,16 @@ class ServerWindow(QMainWindow):
         self.control_port_input.setRange(1, 65535)
         self.control_port_input.setValue(7000)
         config_layout.addRow('控制端口:', self.control_port_input)
+        
+        self.port_start_input = QSpinBox()
+        self.port_start_input.setRange(1, 65535)
+        self.port_start_input.setValue(25565)
+        config_layout.addRow('端口起始:', self.port_start_input)
+        
+        self.port_end_input = QSpinBox()
+        self.port_end_input.setRange(1, 65535)
+        self.port_end_input.setValue(25665)
+        config_layout.addRow('端口结束:', self.port_end_input)
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
@@ -419,19 +469,19 @@ class ServerWindow(QMainWindow):
         
         main_layout.addLayout(button_layout)
         
-        # 代理端口表格
-        proxy_group = QGroupBox('代理端口')
-        proxy_layout = QVBoxLayout()
+        # 已分配端口表格
+        port_group = QGroupBox('已分配端口')
+        port_layout = QVBoxLayout()
         
-        self.proxy_table = QTableWidget()
-        self.proxy_table.setColumnCount(2)
-        self.proxy_table.setHorizontalHeaderLabels(['公网端口', '状态'])
-        self.proxy_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.proxy_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        proxy_layout.addWidget(self.proxy_table)
+        self.port_table = QTableWidget()
+        self.port_table.setColumnCount(2)
+        self.port_table.setHorizontalHeaderLabels(['公网端口', '状态'])
+        self.port_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.port_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        port_layout.addWidget(self.port_table)
         
-        proxy_group.setLayout(proxy_layout)
-        main_layout.addWidget(proxy_group)
+        port_group.setLayout(port_layout)
+        main_layout.addWidget(port_group)
         
         # 日志区域
         log_group = QGroupBox('日志')
@@ -456,13 +506,16 @@ class ServerWindow(QMainWindow):
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                 self.control_port_input.setValue(config.get('control_port', 7000))
+                self.port_start_input.setValue(config.get('port_start', 25565))
+                self.port_end_input.setValue(config.get('port_end', 25665))
             except Exception as e:
                 self.append_log(f'配置加载失败: {e}', "error")
                 
     def save_config(self):
         config = {
             "control_port": self.control_port_input.value(),
-            "proxy_ports": []
+            "port_start": self.port_start_input.value(),
+            "port_end": self.port_end_input.value()
         }
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -472,8 +525,14 @@ class ServerWindow(QMainWindow):
             self.append_log(f'配置保存失败: {e}', "error")
             
     def start_server(self):
+        if self.port_start_input.value() >= self.port_end_input.value():
+            self.append_log('端口范围设置错误', "error")
+            return
+            
         config = {
-            "control_port": self.control_port_input.value()
+            "control_port": self.control_port_input.value(),
+            "port_start": self.port_start_input.value(),
+            "port_end": self.port_end_input.value()
         }
         self.server_thread = ServerThread(config, self.log_emitter)
         self.server_thread.start()
@@ -481,6 +540,8 @@ class ServerWindow(QMainWindow):
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.control_port_input.setEnabled(False)
+        self.port_start_input.setEnabled(False)
+        self.port_end_input.setEnabled(False)
         self.status_label.setText('状态: 运行中')
         self.status_label.setStyleSheet('font-size: 12px; color: #4CAF50; font-weight: bold;')
         
@@ -492,21 +553,23 @@ class ServerWindow(QMainWindow):
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.control_port_input.setEnabled(True)
+        self.port_start_input.setEnabled(True)
+        self.port_end_input.setEnabled(True)
         self.status_label.setText('状态: 已停止')
         self.status_label.setStyleSheet('font-size: 12px; color: #666;')
-        self.proxy_table.setRowCount(0)
+        self.port_table.setRowCount(0)
         self.append_log('服务已停止', "warning")
         
-    def add_proxy_to_table(self, public_port, local_port):
-        row = self.proxy_table.rowCount()
-        self.proxy_table.insertRow(row)
-        self.proxy_table.setItem(row, 0, QTableWidgetItem(str(public_port)))
-        self.proxy_table.setItem(row, 1, QTableWidgetItem('监听中'))
+    def add_port_to_table(self, public_port, status):
+        row = self.port_table.rowCount()
+        self.port_table.insertRow(row)
+        self.port_table.setItem(row, 0, QTableWidgetItem(str(public_port)))
+        self.port_table.setItem(row, 1, QTableWidgetItem(status))
         
-    def remove_proxy_from_table(self, public_port):
-        for row in range(self.proxy_table.rowCount()):
-            if self.proxy_table.item(row, 0).text() == str(public_port):
-                self.proxy_table.removeRow(row)
+    def remove_port_from_table(self, public_port):
+        for row in range(self.port_table.rowCount()):
+            if self.port_table.item(row, 0).text() == str(public_port):
+                self.port_table.removeRow(row)
                 break
         
     def append_log(self, message, level="info"):

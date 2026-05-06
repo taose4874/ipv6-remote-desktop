@@ -11,8 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                             QTextEdit, QGroupBox, QFormLayout, QSpinBox,
-                             QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView)
+                             QTextEdit, QGroupBox, QFormLayout, QSpinBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QFont, QColor
 
@@ -33,9 +32,7 @@ BUFFER_SIZE = 4096
 DEFAULT_CONFIG = {
     "server_addr": "你的公网IPv6地址",
     "server_port": 7000,
-    "proxies": [
-        {"public_port": 25565, "local_port": 25565}
-    ]
+    "local_port": 25565
 }
 
 
@@ -45,6 +42,7 @@ def get_timestamp():
 
 class LogEmitter(QObject):
     log_signal = pyqtSignal(str, str)
+    port_allocated = pyqtSignal(int)
 
 
 class ClientThread(QThread):
@@ -54,6 +52,7 @@ class ClientThread(QThread):
         self.log_emitter = log_emitter
         self.running = False
         self.control_socket = None
+        self.public_port = None
         
     def log(self, message, level="info"):
         self.log_emitter.log_signal.emit(message, level)
@@ -133,7 +132,7 @@ class ClientThread(QThread):
     def connect_to_server(self):
         server_addr = self.config['server_addr']
         server_port = self.config['server_port']
-        proxies = self.config.get('proxies', [])
+        local_port = self.config.get('local_port', 25565)
         
         while self.running:
             try:
@@ -142,10 +141,9 @@ class ClientThread(QThread):
                 self.control_socket.connect((server_addr, server_port))
                 self.log('连接服务器成功！', "success")
                 
-                proxy_ports = [p['public_port'] for p in proxies]
-                register_msg = {'type': 'REGISTER_PROXIES', 'proxy_ports': proxy_ports}
-                self.control_socket.sendall((json.dumps(register_msg) + '\n').encode('utf-8'))
-                self.log(f'已注册端口: {proxy_ports}', "info")
+                self.log(f'请求端口分配，本地端口: {local_port}', "info")
+                req_msg = {'type': 'REQUEST_PORT', 'local_port': local_port}
+                self.control_socket.sendall((json.dumps(req_msg) + '\n').encode('utf-8'))
                 
                 buffer = ''
                 while self.running:
@@ -163,25 +161,25 @@ class ClientThread(QThread):
                             try:
                                 msg = json.loads(line)
                                 
-                                if msg.get('type') == 'NEW_CONNECTION':
+                                if msg.get('type') == 'PORT_ALLOCATED':
+                                    self.public_port = msg.get('public_port')
+                                    self.log(f'端口分配成功！公网端口: {self.public_port}', "success")
+                                    self.log_emitter.port_allocated.emit(self.public_port)
+                                    
+                                elif msg.get('type') == 'PORT_ERROR':
+                                    self.log(f'端口分配失败: {msg.get("message", "")}', "error")
+                                    
+                                elif msg.get('type') == 'NEW_CONNECTION':
                                     proxy_port = msg.get('proxy_port')
                                     self.log(f'收到新连接请求，端口: {proxy_port}', "info")
                                     
-                                    local_port = None
-                                    for p in proxies:
-                                        if p['public_port'] == proxy_port:
-                                            local_port = p['local_port']
-                                            break
-                                    
-                                    if local_port is not None:
+                                    if proxy_port == self.public_port:
                                         tunnel_thread = threading.Thread(
                                             target=self.create_tunnel,
                                             args=(proxy_port, local_port)
                                         )
                                         tunnel_thread.daemon = True
                                         tunnel_thread.start()
-                                    else:
-                                        self.log(f'未找到端口 {proxy_port} 的本地配置', "warning")
                                         
                             except Exception as e:
                                 self.log(f'处理消息错误: {e}', "error")
@@ -224,21 +222,21 @@ class ClientWindow(QMainWindow):
         self.client_thread = None
         self.log_emitter = LogEmitter()
         self.log_emitter.log_signal.connect(self.append_log)
-        self.proxies = []
+        self.log_emitter.port_allocated.connect(self.on_port_allocated)
         self.init_ui()
         self.load_config()
         
     def init_ui(self):
-        self.setWindowTitle('IPv6 内网穿透 - 客户端 (类似FRP)')
-        self.setMinimumSize(1000, 700)
+        self.setWindowTitle('IPv6 内网穿透 - 客户端')
+        self.setMinimumSize(600, 500)
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
         main_layout = QVBoxLayout(central_widget)
         
-        # 服务器配置
-        config_group = QGroupBox('服务器配置')
+        # 配置区域
+        config_group = QGroupBox('配置')
         config_layout = QFormLayout()
         
         self.server_addr_input = QLineEdit()
@@ -250,97 +248,44 @@ class ClientWindow(QMainWindow):
         self.server_port_input.setValue(7000)
         config_layout.addRow('服务器端口:', self.server_port_input)
         
-        config_group.setLayout(config_layout)
-        main_layout.addWidget(config_group)
-        
-        # 端口映射配置
-        proxy_group = QGroupBox('端口映射配置')
-        proxy_layout = QVBoxLayout()
-        
-        proxy_input_layout = QHBoxLayout()
-        self.public_port_input = QSpinBox()
-        self.public_port_input.setRange(1, 65535)
-        self.public_port_input.setValue(25565)
-        proxy_input_layout.addWidget(QLabel('公网端口:'))
-        proxy_input_layout.addWidget(self.public_port_input)
-        
         self.local_port_input = QSpinBox()
         self.local_port_input.setRange(1, 65535)
         self.local_port_input.setValue(25565)
-        proxy_input_layout.addWidget(QLabel('本地端口:'))
-        proxy_input_layout.addWidget(self.local_port_input)
+        config_layout.addRow('本地端口:', self.local_port_input)
         
-        self.add_proxy_btn = QPushButton('添加')
-        self.add_proxy_btn.clicked.connect(self.add_proxy)
-        proxy_input_layout.addWidget(self.add_proxy_btn)
+        config_group.setLayout(config_layout)
+        main_layout.addWidget(config_group)
         
-        proxy_layout.addLayout(proxy_input_layout)
+        # 公网端口显示
+        port_group = QGroupBox('公网端口')
+        port_layout = QHBoxLayout()
         
-        self.proxy_table = QTableWidget()
-        self.proxy_table.setColumnCount(3)
-        self.proxy_table.setHorizontalHeaderLabels(['公网端口', '本地端口', '操作'])
-        self.proxy_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.proxy_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.proxy_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        proxy_layout.addWidget(self.proxy_table)
+        self.public_port_label = QLabel('未分配')
+        self.public_port_label.setStyleSheet('font-size: 18px; font-weight: bold; color: #666;')
+        port_layout.addWidget(self.public_port_label)
         
-        proxy_group.setLayout(proxy_layout)
-        main_layout.addWidget(proxy_group)
+        port_group.setLayout(port_layout)
+        main_layout.addWidget(port_group)
         
         # 控制按钮
         button_layout = QHBoxLayout()
         
-        self.start_button = QPushButton('连接服务器')
-        self.start_button.setStyleSheet('''
+        self.connect_button = QPushButton('连接服务器')
+        self.connect_button.setStyleSheet('''
             QPushButton {
                 background-color: #4CAF50;
                 color: white;
-                font-size: 14px;
+                font-size: 16px;
                 font-weight: bold;
-                padding: 10px;
+                padding: 15px;
                 border-radius: 5px;
             }
             QPushButton:hover {
                 background-color: #45a049;
             }
         ''')
-        self.start_button.clicked.connect(self.start_client)
-        button_layout.addWidget(self.start_button)
-        
-        self.stop_button = QPushButton('断开连接')
-        self.stop_button.setStyleSheet('''
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 10px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #da190b;
-            }
-        ''')
-        self.stop_button.clicked.connect(self.stop_client)
-        self.stop_button.setEnabled(False)
-        button_layout.addWidget(self.stop_button)
-        
-        self.save_config_button = QPushButton('保存配置')
-        self.save_config_button.setStyleSheet('''
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 10px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #0b7dda;
-            }
-        ''')
-        self.save_config_button.clicked.connect(self.save_config)
-        button_layout.addWidget(self.save_config_button)
+        self.connect_button.clicked.connect(self.toggle_connection)
+        button_layout.addWidget(self.connect_button)
         
         main_layout.addLayout(button_layout)
         
@@ -368,8 +313,7 @@ class ClientWindow(QMainWindow):
                     config = json.load(f)
                 self.server_addr_input.setText(config.get('server_addr', '你的公网IPv6地址'))
                 self.server_port_input.setValue(config.get('server_port', 7000))
-                self.proxies = config.get('proxies', [])
-                self.refresh_proxy_table()
+                self.local_port_input.setValue(config.get('local_port', 25565))
             except Exception as e:
                 self.append_log(f'配置加载失败: {e}', "error")
                 
@@ -377,83 +321,86 @@ class ClientWindow(QMainWindow):
         config = {
             "server_addr": self.server_addr_input.text(),
             "server_port": self.server_port_input.value(),
-            "proxies": self.proxies
+            "local_port": self.local_port_input.value()
         }
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            self.append_log('配置已保存', "success")
         except Exception as e:
             self.append_log(f'配置保存失败: {e}', "error")
             
-    def add_proxy(self):
-        public_port = self.public_port_input.value()
-        local_port = self.local_port_input.value()
+    def toggle_connection(self):
+        if self.client_thread is None:
+            self.start_connection()
+        else:
+            self.stop_connection()
+            
+    def start_connection(self):
+        self.save_config()
         
-        for p in self.proxies:
-            if p['public_port'] == public_port:
-                QMessageBox.warning(self, '警告', f'公网端口 {public_port} 已存在')
-                return
-        
-        self.proxies.append({
-            'public_port': public_port,
-            'local_port': local_port
-        })
-        self.refresh_proxy_table()
-        self.append_log(f'添加端口映射: {public_port} -> {local_port}', "success")
-        
-    def remove_proxy(self, row):
-        if 0 <= row < len(self.proxies):
-            removed = self.proxies.pop(row)
-            self.refresh_proxy_table()
-            self.append_log(f'删除端口映射: {removed["public_port"]} -> {removed["local_port"]}', "info")
-            
-    def refresh_proxy_table(self):
-        self.proxy_table.setRowCount(0)
-        for idx, proxy in enumerate(self.proxies):
-            row = self.proxy_table.rowCount()
-            self.proxy_table.insertRow(row)
-            self.proxy_table.setItem(row, 0, QTableWidgetItem(str(proxy['public_port'])))
-            self.proxy_table.setItem(row, 1, QTableWidgetItem(str(proxy['local_port'])))
-            
-            delete_btn = QPushButton('删除')
-            delete_btn.clicked.connect(lambda checked, r=idx: self.remove_proxy(r))
-            self.proxy_table.setCellWidget(row, 2, delete_btn)
-            
-    def start_client(self):
-        if not self.proxies:
-            QMessageBox.warning(self, '警告', '请至少添加一个端口映射')
-            return
-            
         config = {
             "server_addr": self.server_addr_input.text(),
             "server_port": self.server_port_input.value(),
-            "proxies": self.proxies
+            "local_port": self.local_port_input.value()
         }
         self.client_thread = ClientThread(config, self.log_emitter)
         self.client_thread.start()
         
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
+        self.connect_button.setText('断开服务器')
+        self.connect_button.setStyleSheet('''
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #da190b;
+            }
+        ''')
+        
         self.server_addr_input.setEnabled(False)
         self.server_port_input.setEnabled(False)
-        self.add_proxy_btn.setEnabled(False)
+        self.local_port_input.setEnabled(False)
         self.status_label.setText('状态: 连接中...')
         self.status_label.setStyleSheet('font-size: 12px; color: #FF9800; font-weight: bold;')
         
-    def stop_client(self):
+    def stop_connection(self):
         if self.client_thread:
             self.client_thread.stop()
             self.client_thread = None
             
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
+        self.connect_button.setText('连接服务器')
+        self.connect_button.setStyleSheet('''
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        ''')
+        
         self.server_addr_input.setEnabled(True)
         self.server_port_input.setEnabled(True)
-        self.add_proxy_btn.setEnabled(True)
+        self.local_port_input.setEnabled(True)
         self.status_label.setText('状态: 已断开')
         self.status_label.setStyleSheet('font-size: 12px; color: #666;')
+        self.public_port_label.setText('未分配')
+        self.public_port_label.setStyleSheet('font-size: 18px; font-weight: bold; color: #666;')
         self.append_log('连接已断开', "warning")
+        
+    def on_port_allocated(self, port):
+        self.public_port_label.setText(str(port))
+        self.public_port_label.setStyleSheet('font-size: 18px; font-weight: bold; color: #4CAF50;')
+        self.status_label.setText('状态: 已连接')
+        self.status_label.setStyleSheet('font-size: 12px; color: #4CAF50; font-weight: bold;')
         
     def append_log(self, message, level="info"):
         timestamp = get_timestamp()
