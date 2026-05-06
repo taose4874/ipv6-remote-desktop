@@ -1,14 +1,16 @@
 # IPv6 内网穿透工具
 
-一个简单的 IPv6 内网穿透工具，让公网 IPv6 可以访问内网服务（如 Minecraft）。
+一个简单高效的 IPv6 内网穿透工具，帮助你将内网服务暴露到公网，支持 Minecraft 等游戏联机。
 
 ## 功能特点
 
 - ✅ IPv6 原生支持
+- ✅ 美观的图形化界面（PyQt6）
 - ✅ TCP 端口转发
 - ✅ 支持 Minecraft 等游戏
 - ✅ 自动重连
 - ✅ 轻量级高性能
+- ✅ 彩色日志显示
 
 ## 使用场景
 
@@ -20,34 +22,26 @@
 
 ### 1. 你（公网 IPv6）：服务器端
 
-创建配置文件 `config_server.json`：
-```json
-{
-  "control_port": 7000,
-  "listen_port": 25565
-}
-```
+运行 `IPv6ProxyServer.exe`：
 
-运行服务器：
-```bash
-python server.py
-```
+- 设置控制端口（默认 7000）
+- 设置游戏监听端口（默认 25565）
+- 点击"保存配置"
+- 点击"启动服务"
+
+配置文件 `config_server.json` 会自动生成。
 
 ### 2. 朋友（内网 IPv6）：客户端
 
-创建配置文件 `config_client.json`：
-```json
-{
-  "server_addr": "你的公网IPv6地址",
-  "server_port": 7000,
-  "local_port": 25565
-}
-```
+运行 `IPv6ProxyClient.exe`：
 
-运行客户端：
-```bash
-python client.py
-```
+- 设置服务器地址（你的公网 IPv6）
+- 设置服务器端口（默认 7000）
+- 设置本地服务端口（例如 Minecraft 的 25565）
+- 点击"保存配置"
+- 点击"连接服务器"
+
+配置文件 `config_client.json` 会自动生成。
 
 ### 3. 连接游戏
 
@@ -71,7 +65,7 @@ python client.py
 |------|------|--------|
 | server_addr | 服务器 IPv6 地址 | - |
 | server_port | 服务器控制端口 | 7000 |
-| local_port | 本地服务端口（如 Minecraft） | 25565 |
+| local_port | 本地服务端口（例如 Minecraft） | 25565 |
 
 ## 打包为 EXE
 
@@ -89,6 +83,7 @@ git push origin v1.0.0
 
 安装依赖：
 ```bash
+pip install -r requirements.txt
 pip install pyinstaller
 ```
 
@@ -103,6 +98,20 @@ pyinstaller --clean client.spec
 ```
 
 打包后的文件在 `dist/` 目录。
+
+## 界面预览
+
+### 服务器端界面
+- 配置面板：设置端口
+- 控制按钮：启动/停止服务
+- 日志面板：实时显示彩色日志
+- 状态显示：运行状态提示
+
+### 客户端界面
+- 配置面板：设置服务器地址和端口
+- 控制按钮：连接/断开
+- 日志面板：实时显示彩色日志
+- 状态显示：连接状态提示
 
 ## 工作原理
 
