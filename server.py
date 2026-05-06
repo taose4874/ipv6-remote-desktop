@@ -69,6 +69,8 @@ class ServerThread(QThread):
         port_start = self.config.get('port_start', 25565)
         port_end = self.config.get('port_end', 65535)
         self.available_ports = list(range(port_start, port_end + 1))
+        import random
+        random.shuffle(self.available_ports)
         self.log(f'可用端口范围: {port_start} - {port_end}, 共 {len(self.available_ports)} 个端口', 'info')
         
     def allocate_port(self):
