@@ -8,6 +8,7 @@ import json
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QTextEdit, QGroupBox, QFormLayout, QSpinBox,
@@ -16,7 +17,17 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QFont, QTextCharFormat, QColor
 
 
-CONFIG_FILE = 'config_client.json'
+def get_config_path(filename):
+    if sys.platform == 'win32':
+        config_dir = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
+    else:
+        config_dir = Path.home() / '.config'
+    app_dir = config_dir / 'IPv6Proxy'
+    app_dir.mkdir(parents=True, exist_ok=True)
+    return str(app_dir / filename)
+
+
+CONFIG_FILE = get_config_path('config_client.json')
 BUFFER_SIZE = 4096
 
 DEFAULT_CONFIG = {
