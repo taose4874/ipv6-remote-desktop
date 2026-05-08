@@ -20,10 +20,8 @@ from PyQt6.QtGui import QFont, QColor
 def get_config_path(filename):
     # 获取程序所在目录
     if getattr(sys, 'frozen', False):
-        # 打包后的exe程序
         program_dir = Path(sys.executable).parent
     else:
-        # 开发环境下的脚本文件
         program_dir = Path(__file__).parent
     return str(program_dir / filename)
 
@@ -44,9 +42,20 @@ def get_timestamp():
 
 class LogEmitter(QObject):
     log_signal = pyqtSignal(str, str)
-    port_added = pyqtSignal(int, str)
+    port_added = pyqtSignal(int, str, str)
     port_removed = pyqtSignal(int)
     server_addr_found = pyqtSignal(str)
+
+
+class ClientSession:
+    def __init__(self, conn, addr, session_id):
+        self.conn = conn
+        self.addr = addr
+        self.session_id = session_id
+        self.public_port = None
+        self.local_port = None
+        self.tunnel_socket = None
+        self.running = False
 
 
 class ServerThread(QThread):
@@ -55,10 +64,9 @@ class ServerThread(QThread):
         self.config = config
         self.log_emitter = log_emitter
         self.running = False
-        self.client_control_socket = None
-        self.client_connected = False
         self.lock = threading.Lock()
-        self.assigned_ports = {}
+        self.clients = {}
+        self.client_counter = 0
         self.available_ports = []
         self.proxy_listeners = {}
         self.pending_connections = {}
@@ -79,14 +87,12 @@ class ServerThread(QThread):
             if not self.available_ports:
                 return None
             port = self.available_ports.pop(0)
-            self.assigned_ports[port] = {'status': '已分配', 'client': None}
             return port
             
     def release_port(self, port):
         import random
         with self.lock:
-            if port in self.assigned_ports:
-                del self.assigned_ports[port]
+            if port:
                 self.available_ports.append(port)
                 random.shuffle(self.available_ports)
                 self.log_emitter.port_removed.emit(port)
@@ -137,7 +143,7 @@ class ServerThread(QThread):
             except:
                 pass
                 
-    def handle_tunnel_connection(self, tunnel_socket, addr):
+    def handle_tunnel_connection(self, tunnel_socket, addr, session_id):
         try:
             tunnel_socket.settimeout(5.0)
             buffer = ''
@@ -188,17 +194,21 @@ class ServerThread(QThread):
             
     def handle_proxy_connection(self, game_socket, addr, proxy_port):
         with self.lock:
-            if not self.client_connected or self.client_control_socket is None:
-                game_socket.close()
-                return
-            
             if proxy_port not in self.pending_connections:
                 self.pending_connections[proxy_port] = []
             self.pending_connections[proxy_port].append(game_socket)
             
         try:
-            req_msg = {'type': 'NEW_CONNECTION', 'proxy_port': proxy_port}
-            self.client_control_socket.sendall((json.dumps(req_msg) + '\n').encode('utf-8'))
+            # 通知所有相关的客户端有新连接
+            with self.lock:
+                for session_id, client in self.clients.items():
+                    if client.public_port == proxy_port:
+                        try:
+                            req_msg = {'type': 'NEW_CONNECTION', 'proxy_port': proxy_port}
+                            client.conn.sendall((json.dumps(req_msg) + '\n').encode('utf-8'))
+                            break
+                        except:
+                            pass
             
         except Exception as e:
             game_socket.close()
@@ -207,12 +217,17 @@ class ServerThread(QThread):
                     self.pending_connections[proxy_port].remove(game_socket)
                 
     def handle_client_control(self, conn, addr):
-        self.log(f'客户端连接: {addr[0]}:{addr[1]}', 'success')
+        with self.lock:
+            self.client_counter += 1
+            session_id = self.client_counter
+            
+        client = ClientSession(conn, addr, session_id)
         
         with self.lock:
-            self.client_control_socket = conn
-            self.client_connected = True
+            self.clients[session_id] = client
             
+        self.log(f'客户端{session_id}连接: {addr[0]}:{addr[1]}', 'success')
+        
         try:
             conn.settimeout(2.0)
             buffer = ''
@@ -234,19 +249,22 @@ class ServerThread(QThread):
                             msg = json.loads(line)
                             if msg.get('type') == 'REQUEST_PORT':
                                 local_port = msg.get('local_port')
-                                self.log(f'收到端口请求，本地端口: {local_port}', 'info')
                                 
                                 public_port = self.allocate_port()
                                 if public_port:
-                                    self.log(f'分配端口: {public_port}', 'success')
-                                    self.log_emitter.port_added.emit(public_port, '已分配')
+                                    client.public_port = public_port
+                                    client.local_port = local_port
+                                    client.running = True
+                                    
+                                    self.log(f'客户端{session_id}分配端口: {public_port}', 'success')
+                                    self.log_emitter.port_added.emit(public_port, '已分配', f'客户端{session_id}')
                                     
                                     resp_msg = {'type': 'PORT_ALLOCATED', 'public_port': public_port}
                                     conn.sendall((json.dumps(resp_msg) + '\n').encode('utf-8'))
                                     
                                     self.start_proxy_listener(public_port)
                                 else:
-                                    self.log('没有可用端口', 'error')
+                                    self.log(f'客户端{session_id}端口分配失败', 'error')
                                     resp_msg = {'type': 'PORT_ERROR', 'message': '没有可用端口'}
                                     conn.sendall((json.dumps(resp_msg) + '\n').encode('utf-8'))
                                     
@@ -256,22 +274,23 @@ class ServerThread(QThread):
                     continue
                     
         except Exception as e:
-            self.log(f'客户端连接错误: {e}', 'error')
+            self.log(f'客户端{session_id}连接错误: {e}', 'error')
         finally:
             with self.lock:
-                self.client_control_socket = None
-                self.client_connected = False
+                if session_id in self.clients:
+                    del self.clients[session_id]
             
-            for port in list(self.assigned_ports.keys()):
-                self.stop_proxy_listener(port)
-                self.release_port(port)
+            # 释放端口
+            if client.public_port:
+                self.stop_proxy_listener(client.public_port)
+                self.release_port(client.public_port)
             
             try:
                 conn.close()
             except:
                 pass
             
-            self.log(f'客户端断开: {addr[0]}', 'warning')
+            self.log(f'客户端{session_id}断开: {addr[0]}', 'warning')
             
     def start_proxy_listener(self, proxy_port):
         if proxy_port in self.proxy_listeners:
@@ -339,26 +358,19 @@ class ServerThread(QThread):
                     try:
                         conn, addr = server_socket.accept()
                         
-                        with self.lock:
-                            if not self.client_connected:
-                                client_thread = threading.Thread(
-                                    target=self.handle_client_control,
-                                    args=(conn, addr)
-                                )
-                                client_thread.daemon = True
-                                client_thread.start()
-                            else:
-                                tunnel_thread = threading.Thread(
-                                    target=self.handle_tunnel_connection,
-                                    args=(conn, addr)
-                                )
-                                tunnel_thread.daemon = True
-                                tunnel_thread.start()
+                        # 新连接都作为客户端控制连接处理
+                        client_thread = threading.Thread(
+                            target=self.handle_client_control,
+                            args=(conn, addr)
+                        )
+                        client_thread.daemon = True
+                        client_thread.start()
+                        
                     except socket.timeout:
                         continue
                         
                 except Exception as e:
-                    self.log(f'接受控制连接错误: {e}', 'error')
+                    self.log(f'接受连接错误: {e}', 'error')
                     
         except Exception as e:
             self.log(f'控制端口监听失败: {e}', 'error')
@@ -507,10 +519,11 @@ class ServerWindow(QMainWindow):
         port_layout = QVBoxLayout()
         
         self.port_table = QTableWidget()
-        self.port_table.setColumnCount(2)
-        self.port_table.setHorizontalHeaderLabels(['公网端口', '状态'])
-        self.port_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.port_table.setColumnCount(3)
+        self.port_table.setHorizontalHeaderLabels(['公网端口', '客户端', '状态'])
+        self.port_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.port_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.port_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         port_layout.addWidget(self.port_table)
         
         port_group.setLayout(port_layout)
@@ -611,11 +624,12 @@ class ServerWindow(QMainWindow):
         self.port_table.setRowCount(0)
         self.append_log('服务已停止', 'warning')
         
-    def add_port_to_table(self, public_port, status):
+    def add_port_to_table(self, public_port, status, client_info):
         row = self.port_table.rowCount()
         self.port_table.insertRow(row)
         self.port_table.setItem(row, 0, QTableWidgetItem(str(public_port)))
-        self.port_table.setItem(row, 1, QTableWidgetItem(status))
+        self.port_table.setItem(row, 1, QTableWidgetItem(client_info))
+        self.port_table.setItem(row, 2, QTableWidgetItem(status))
         
     def remove_port_from_table(self, public_port):
         for row in range(self.port_table.rowCount()):
