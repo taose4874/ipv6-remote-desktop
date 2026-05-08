@@ -226,7 +226,8 @@ class ServerThread(QThread):
         with self.lock:
             self.clients[session_id] = client
             
-        self.log(f'客户端{session_id}连接: {addr[0]}:{addr[1]}', 'success')
+        client_addr = addr[0]
+        self.log(f'客户端连接: {client_addr}', 'success')
         
         try:
             conn.settimeout(2.0)
@@ -256,15 +257,15 @@ class ServerThread(QThread):
                                     client.local_port = local_port
                                     client.running = True
                                     
-                                    self.log(f'客户端{session_id}分配端口: {public_port}', 'success')
-                                    self.log_emitter.port_added.emit(public_port, '已分配', f'客户端{session_id}')
+                                    self.log(f'分配端口 {public_port} -> {client_addr}', 'success')
+                                    self.log_emitter.port_added.emit(public_port, '已分配', client_addr)
                                     
                                     resp_msg = {'type': 'PORT_ALLOCATED', 'public_port': public_port}
                                     conn.sendall((json.dumps(resp_msg) + '\n').encode('utf-8'))
                                     
                                     self.start_proxy_listener(public_port)
                                 else:
-                                    self.log(f'客户端{session_id}端口分配失败', 'error')
+                                    self.log(f'{client_addr} 端口分配失败', 'error')
                                     resp_msg = {'type': 'PORT_ERROR', 'message': '没有可用端口'}
                                     conn.sendall((json.dumps(resp_msg) + '\n').encode('utf-8'))
                                     
@@ -274,7 +275,7 @@ class ServerThread(QThread):
                     continue
                     
         except Exception as e:
-            self.log(f'客户端{session_id}连接错误: {e}', 'error')
+            self.log(f'{client_addr} 连接错误: {e}', 'error')
         finally:
             with self.lock:
                 if session_id in self.clients:
@@ -290,7 +291,7 @@ class ServerThread(QThread):
             except:
                 pass
             
-            self.log(f'客户端{session_id}断开: {addr[0]}', 'warning')
+            self.log(f'客户端断开: {client_addr}', 'warning')
             
     def start_proxy_listener(self, proxy_port):
         if proxy_port in self.proxy_listeners:
@@ -520,7 +521,7 @@ class ServerWindow(QMainWindow):
         
         self.port_table = QTableWidget()
         self.port_table.setColumnCount(3)
-        self.port_table.setHorizontalHeaderLabels(['公网端口', '客户端', '状态'])
+        self.port_table.setHorizontalHeaderLabels(['公网端口', '客户端地址', '状态'])
         self.port_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.port_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.port_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -624,11 +625,11 @@ class ServerWindow(QMainWindow):
         self.port_table.setRowCount(0)
         self.append_log('服务已停止', 'warning')
         
-    def add_port_to_table(self, public_port, status, client_info):
+    def add_port_to_table(self, public_port, status, client_addr):
         row = self.port_table.rowCount()
         self.port_table.insertRow(row)
         self.port_table.setItem(row, 0, QTableWidgetItem(str(public_port)))
-        self.port_table.setItem(row, 1, QTableWidgetItem(client_info))
+        self.port_table.setItem(row, 1, QTableWidgetItem(client_addr))
         self.port_table.setItem(row, 2, QTableWidgetItem(status))
         
     def remove_port_from_table(self, public_port):
