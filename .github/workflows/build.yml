@@ -41,11 +41,25 @@ jobs:
           Rename-Item -Path "dist\IPv6ProxyServer.exe" -NewName "IPv6穿透服务端_Win10.exe" -Force
           Rename-Item -Path "dist\IPv6ProxyClient.exe" -NewName "IPv6穿透客户端_Win10.exe" -Force
 
-      - name: Upload Win10 artifacts
+      - name: Create ZIP for Win10
+        run: |
+          Compress-Archive -Path "dist\IPv6穿透服务端_Win10.exe", "dist\IPv6穿透客户端_Win10.exe" -DestinationPath "IPv6穿透工具_Win10.zip" -Force
+
+      - name: Upload Win10 artifact
         uses: actions/upload-artifact@v4
         with:
           name: Win10-Build
-          path: dist/*.exe
+          path: IPv6穿透工具_Win10.zip
+
+      - name: Create Release for Win10
+        uses: softprops/action-gh-release@v2
+        with:
+          files: IPv6穿透工具_Win10.zip
+          body: "IPv6 内网穿透工具 - Windows 10/11 版本"
+          tag_name: ${{ github.ref_name }}-win10
+          name: ${{ github.ref_name }} - Win10
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-win7:
     runs-on: windows-latest
@@ -78,43 +92,22 @@ jobs:
           Rename-Item -Path "dist\IPv6ProxyServer.exe" -NewName "IPv6穿透服务端_Win7.exe" -Force
           Rename-Item -Path "dist\IPv6ProxyClient.exe" -NewName "IPv6穿透客户端_Win7.exe" -Force
 
-      - name: Upload Win7 artifacts
+      - name: Create ZIP for Win7
+        run: |
+          Compress-Archive -Path "dist\IPv6穿透服务端_Win7.exe", "dist\IPv6穿透客户端_Win7.exe" -DestinationPath "IPv6穿透工具_Win7.zip" -Force
+
+      - name: Upload Win7 artifact
         uses: actions/upload-artifact@v4
         with:
           name: Win7-Build
-          path: dist/*.exe
+          path: IPv6穿透工具_Win7.zip
 
-  release:
-    needs: [build-win10, build-win7]
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Create dist directory
-        run: mkdir -p dist
-
-      - name: Download Win10 artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: Win10-Build
-          path: dist/
-
-      - name: Download Win7 artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: Win7-Build
-          path: dist/
-
-      - name: List files
-        run: ls -la dist/
-
-      - name: Create ZIP archive with Chinese name
-        run: |
-          zip -r "IPv6穿透工具.zip" dist/
-
-      - name: Create Release
+      - name: Create Release for Win7
         uses: softprops/action-gh-release@v2
         with:
-          files: IPv6穿透工具.zip
-          body: "IPv6 内网穿透工具\n\n包含两个版本：\n- Win10+: IPv6穿透服务端_Win10.exe, IPv6穿透客户端_Win10.exe\n- Win7: IPv6穿透服务端_Win7.exe, IPv6穿透客户端_Win7.exe"
+          files: IPv6穿透工具_Win7.zip
+          body: "IPv6 内网穿透工具 - Windows 7 版本"
+          tag_name: ${{ github.ref_name }}-win7
+          name: ${{ github.ref_name }} - Win7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
