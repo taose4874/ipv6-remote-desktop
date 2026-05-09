@@ -9,12 +9,20 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                             QTextEdit, QGroupBox, QFormLayout, QSpinBox,
-                             QTableWidget, QTableWidgetItem, QHeaderView)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
-from PyQt6.QtGui import QFont, QColor
+try:
+    from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                                 QHBoxLayout, QLabel, QLineEdit, QPushButton, 
+                                 QTextEdit, QGroupBox, QFormLayout, QSpinBox,
+                                 QTableWidget, QTableWidgetItem, QHeaderView)
+    from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
+    from PyQt6.QtGui import QFont, QColor
+except ImportError:
+    from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                                 QHBoxLayout, QLabel, QLineEdit, QPushButton, 
+                                 QTextEdit, QGroupBox, QFormLayout, QSpinBox,
+                                 QTableWidget, QTableWidgetItem, QHeaderView)
+    from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
+    from PyQt5.QtGui import QFont, QColor
 
 
 def get_config_path(filename):

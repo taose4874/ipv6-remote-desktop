@@ -9,11 +9,18 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                             QTextEdit, QGroupBox, QFormLayout, QSpinBox)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
-from PyQt6.QtGui import QFont, QColor
+try:
+    from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                                 QHBoxLayout, QLabel, QLineEdit, QPushButton, 
+                                 QTextEdit, QGroupBox, QFormLayout, QSpinBox)
+    from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
+    from PyQt6.QtGui import QFont, QColor
+except ImportError:
+    from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                                 QHBoxLayout, QLabel, QLineEdit, QPushButton, 
+                                 QTextEdit, QGroupBox, QFormLayout, QSpinBox)
+    from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
+    from PyQt5.QtGui import QFont, QColor
 
 
 def get_config_path(filename):
@@ -463,3 +470,73 @@ def main():
 
 if __name__ == '__main__':
     main()
+#!/usr/bin/env python3
+# -*-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import socket
+import threading
+import json
+import#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import socket
+import threading
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+from PyQt5#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import socket
+import threading
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+from PyQt5.QtWidgets import (QApplication, QMain#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import socket
+import threading
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                             QHBoxLayout, QLabel,#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import socket
+import threading
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
+                             QTextEdit, QGroupBox, QForm#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import socket
+import threading
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
+                             QTextEdit, QGroupBox, QFormLayout, QSpinBox)
+from PyQt5.QtCore import Qt, QThread,

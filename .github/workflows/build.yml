@@ -10,17 +10,19 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
+  build-win10:
     runs-on: windows-latest
+    outputs:
+      job_id: ${{ github.job }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.8
+      - name: Set up Python 3.11 (Win10+)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.8'
+          python-version: '3.11'
           cache: 'pip'
 
       - name: Install dependencies
@@ -36,19 +38,85 @@ jobs:
         run: |
           pyinstaller --clean client.spec
 
-      - name: Create ZIP archive
+      - name: Rename files for Win10
         run: |
-          Compress-Archive -Path "dist\IPv6ProxyServer.exe", "dist\IPv6ProxyClient.exe" -DestinationPath "IPv6Proxy.zip" -Force
+          Rename-Item -Path "dist\IPv6ProxyServer.exe" -NewName "IPv6ProxyServer_Win10.exe" -Force
+          Rename-Item -Path "dist\IPv6ProxyClient.exe" -NewName "IPv6ProxyClient_Win10.exe" -Force
+
+      - name: Upload Win10 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Win10-Build
+          path: dist/*.exe
+
+  build-win7:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.8 (Win7 compatible)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+          cache: 'pip'
+
+      - name: Install dependencies for Win7
+        run: |
+          pip install PyQt5>=5.15.0
+          pip install pyinstaller
+
+      - name: Build Server for Win7
+        run: |
+          pyinstaller --clean server.spec
+
+      - name: Build Client for Win7
+        run: |
+          pyinstaller --clean client.spec
+
+      - name: Rename files for Win7
+        run: |
+          Rename-Item -Path "dist\IPv6ProxyServer.exe" -NewName "IPv6ProxyServer_Win7.exe" -Force
+          Rename-Item -Path "dist\IPv6ProxyClient.exe" -NewName "IPv6ProxyClient_Win7.exe" -Force
+
+      - name: Upload Win7 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Win7-Build
+          path: dist/*.exe
+
+  release:
+    needs: [build-win10, build-win7]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Create dist directory
+        run: mkdir -p dist
+
+      - name: Download Win10 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Win10-Build
+          path: dist/
+
+      - name: Download Win7 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Win7-Build
+          path: dist/
 
       - name: List files
+        run: ls -la dist/
+
+      - name: Create ZIP archive
         run: |
-          dir dist
-          dir *.zip
+          zip -r IPv6Proxy.zip dist/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: IPv6Proxy.zip
-          body: "IPv6 Proxy Server and Client build (Windows 7 compatible)"
+          body: "IPv6 Proxy Server and Client build\n\n包含两个版本：\n- Win10+: IPv6ProxyServer_Win10.exe, IPv6ProxyClient_Win10.exe\n- Win7: IPv6ProxyServer_Win7.exe, IPv6ProxyClient_Win7.exe"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
