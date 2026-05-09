@@ -151,30 +151,9 @@ class ServerThread(QThread):
             except:
                 pass
                 
-    def handle_tunnel_connection(self, tunnel_socket, addr, session_id):
+    def handle_tunnel_connection(self, tunnel_socket, addr, proxy_port):
         try:
             tunnel_socket.settimeout(5.0)
-            buffer = ''
-            proxy_port = None
-            
-            while self.running:
-                try:
-                    data = tunnel_socket.recv(BUFFER_SIZE)
-                    if not data:
-                        break
-                    
-                    buffer += data.decode('utf-8', errors='ignore')
-                    if '\n' in buffer:
-                        line, buffer = buffer.split('\n', 1)
-                        try:
-                            msg = json.loads(line)
-                            if msg.get('type') == 'TUNNEL_READY':
-                                proxy_port = msg.get('proxy_port')
-                                break
-                        except:
-                            pass
-                except socket.timeout:
-                    break
             
             if proxy_port is None:
                 tunnel_socket.close()
@@ -182,9 +161,12 @@ class ServerThread(QThread):
             
             with self.lock:
                 if proxy_port not in self.pending_connections or not self.pending_connections[proxy_port]:
+                    self.log(f'没有待处理的连接，端口: {proxy_port}', 'warning')
                     tunnel_socket.close()
                     return
                 game_socket = self.pending_connections[proxy_port].pop(0)
+            
+            self.log(f'隧道连接成功，转发数据...', 'info')
             
             thread1 = threading.Thread(target=self.forward_data, args=(game_socket, tunnel_socket, f'game->{proxy_port}'))
             thread2 = threading.Thread(target=self.forward_data, args=(tunnel_socket, game_socket, f'{proxy_port}->game'))
@@ -198,7 +180,7 @@ class ServerThread(QThread):
                 time.sleep(0.1)
             
         except Exception as e:
-            pass
+            self.log(f'隧道连接错误: {e}', 'error')
             
     def handle_proxy_connection(self, game_socket, addr, proxy_port):
         with self.lock:
@@ -367,7 +349,32 @@ class ServerThread(QThread):
                     try:
                         conn, addr = server_socket.accept()
                         
-                        # 新连接都作为客户端控制连接处理
+                        # 检查是否是客户端的隧道连接
+                        conn.settimeout(2.0)
+                        try:
+                            first_data = conn.recv(1024)
+                            if first_data:
+                                try:
+                                    msg = json.loads(first_data.decode('utf-8').strip())
+                                    if msg.get('type') == 'TUNNEL_READY':
+                                        # 这是隧道连接，交给handle_tunnel_connection处理
+                                        proxy_port = msg.get('proxy_port')
+                                        self.log(f'收到隧道连接请求，端口: {proxy_port}', 'info')
+                                        tunnel_thread = threading.Thread(
+                                            target=self.handle_tunnel_connection,
+                                            args=(conn, addr, proxy_port)
+                                        )
+                                        tunnel_thread.daemon = True
+                                        tunnel_thread.start()
+                                        continue
+                                except:
+                                    pass
+                            # 如果不是TUNNEL_READY，作为普通控制连接处理
+                            conn.sendall(first_data)
+                        except socket.timeout:
+                            pass
+                        
+                        # 普通控制连接
                         client_thread = threading.Thread(
                             target=self.handle_client_control,
                             args=(conn, addr)
