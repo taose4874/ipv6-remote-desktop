@@ -250,10 +250,20 @@ class ServerThread(QThread):
                                     self.log(f'分配端口 {public_port} -> {client_addr}', 'success')
                                     self.log_emitter.port_added.emit(public_port, '已分配', client_addr)
                                     
+                                    # 先启动代理监听器
+                                    try:
+                                        self.start_proxy_listener(public_port)
+                                    except Exception as e:
+                                        self.log(f'启动代理监听失败: {e}', 'error')
+                                        self.release_port(public_port)
+                                        resp_msg = {'type': 'PORT_ERROR', 'message': '启动监听失败'}
+                                        conn.sendall((json.dumps(resp_msg) + '\n').encode('utf-8'))
+                                        continue
+                                    
+                                    # 发送响应
                                     resp_msg = {'type': 'PORT_ALLOCATED', 'public_port': public_port}
                                     conn.sendall((json.dumps(resp_msg) + '\n').encode('utf-8'))
-                                    
-                                    self.start_proxy_listener(public_port)
+                                    self.log(f'已发送端口分配响应: {public_port}', 'info')
                                 else:
                                     self.log(f'{client_addr} 端口分配失败', 'error')
                                     resp_msg = {'type': 'PORT_ERROR', 'message': '没有可用端口'}
