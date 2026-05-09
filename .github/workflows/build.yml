@@ -51,16 +51,6 @@ jobs:
           name: Win10-Build
           path: IPv6穿透工具_Win10.zip
 
-      - name: Create Release for Win10
-        uses: softprops/action-gh-release@v2
-        with:
-          files: IPv6穿透工具_Win10.zip
-          body: "IPv6 内网穿透工具 - Windows 10/11 版本"
-          tag_name: ${{ github.ref_name }}-win10
-          name: ${{ github.ref_name }} - Win10
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   build-win7:
     runs-on: windows-latest
     
@@ -102,12 +92,32 @@ jobs:
           name: Win7-Build
           path: IPv6穿透工具_Win7.zip
 
-      - name: Create Release for Win7
+  release:
+    needs: [build-win10, build-win7]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download Win10 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Win10-Build
+          path: .
+
+      - name: Download Win7 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Win7-Build
+          path: .
+
+      - name: List files
+        run: ls -la
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: IPv6穿透工具_Win7.zip
-          body: "IPv6 内网穿透工具 - Windows 7 版本"
-          tag_name: ${{ github.ref_name }}-win7
-          name: ${{ github.ref_name }} - Win7
+          files: |
+            IPv6穿透工具_Win10.zip
+            IPv6穿透工具_Win7.zip
+          body: "IPv6 内网穿透工具\n\n包含两个版本：\n- Win10+: IPv6穿透工具_Win10.zip\n- Win7: IPv6穿透工具_Win7.zip"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
