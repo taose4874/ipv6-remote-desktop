@@ -90,9 +90,9 @@ class ClientThread(QThread):
                 
     def handle_tunnel(self, tunnel_socket, local_port):
         try:
-            local_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            local_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             local_socket.settimeout(5.0)
-            local_socket.connect(('::1', local_port))
+            local_socket.connect(('127.0.0.1', local_port))
             self.log(f'连接本地端口: {local_port}', 'info')
             
             thread1 = threading.Thread(target=self.forward_data, args=(tunnel_socket, local_socket, f'tunnel->{local_port}'))
