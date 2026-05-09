@@ -12,8 +12,6 @@ env:
 jobs:
   build-win10:
     runs-on: windows-latest
-    outputs:
-      job_id: ${{ github.job }}
     
     steps:
       - name: Checkout code
@@ -40,8 +38,8 @@ jobs:
 
       - name: Rename files for Win10
         run: |
-          Rename-Item -Path "dist\IPv6ProxyServer.exe" -NewName "IPv6ProxyServer_Win10.exe" -Force
-          Rename-Item -Path "dist\IPv6ProxyClient.exe" -NewName "IPv6ProxyClient_Win10.exe" -Force
+          Rename-Item -Path "dist\IPv6ProxyServer.exe" -NewName "IPv6穿透服务端_Win10.exe" -Force
+          Rename-Item -Path "dist\IPv6ProxyClient.exe" -NewName "IPv6穿透客户端_Win10.exe" -Force
 
       - name: Upload Win10 artifacts
         uses: actions/upload-artifact@v4
@@ -77,8 +75,8 @@ jobs:
 
       - name: Rename files for Win7
         run: |
-          Rename-Item -Path "dist\IPv6ProxyServer.exe" -NewName "IPv6ProxyServer_Win7.exe" -Force
-          Rename-Item -Path "dist\IPv6ProxyClient.exe" -NewName "IPv6ProxyClient_Win7.exe" -Force
+          Rename-Item -Path "dist\IPv6ProxyServer.exe" -NewName "IPv6穿透服务端_Win7.exe" -Force
+          Rename-Item -Path "dist\IPv6ProxyClient.exe" -NewName "IPv6穿透客户端_Win7.exe" -Force
 
       - name: Upload Win7 artifacts
         uses: actions/upload-artifact@v4
@@ -109,14 +107,14 @@ jobs:
       - name: List files
         run: ls -la dist/
 
-      - name: Create ZIP archive
+      - name: Create ZIP archive with Chinese name
         run: |
-          zip -r IPv6Proxy.zip dist/
+          zip -r "IPv6穿透工具.zip" dist/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: IPv6Proxy.zip
-          body: "IPv6 Proxy Server and Client build\n\n包含两个版本：\n- Win10+: IPv6ProxyServer_Win10.exe, IPv6ProxyClient_Win10.exe\n- Win7: IPv6ProxyServer_Win7.exe, IPv6ProxyClient_Win7.exe"
+          files: IPv6穿透工具.zip
+          body: "IPv6 内网穿透工具\n\n包含两个版本：\n- Win10+: IPv6穿透服务端_Win10.exe, IPv6穿透客户端_Win10.exe\n- Win7: IPv6穿透服务端_Win7.exe, IPv6穿透客户端_Win7.exe"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
