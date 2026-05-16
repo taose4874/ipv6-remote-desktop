@@ -206,7 +206,7 @@ class ServerThread(QThread):
                 if proxy_port in self.pending_connections and game_socket in self.pending_connections[proxy_port]:
                     self.pending_connections[proxy_port].remove(game_socket)
                 
-    def handle_client_control(self, conn, addr):
+    def handle_client_control(self, conn, addr, initial_data=b''):
         with self.lock:
             self.client_counter += 1
             session_id = self.client_counter
@@ -215,13 +215,15 @@ class ServerThread(QThread):
         
         with self.lock:
             self.clients[session_id] = client
-            
+        
         client_addr = addr[0]
         self.log(f'客户端连接: {client_addr}', 'success')
         
         try:
             conn.settimeout(2.0)
             buffer = ''
+            if initial_data:
+                buffer += initial_data.decode('utf-8', errors='ignore')
             while self.running:
                 try:
                     data = conn.recv(BUFFER_SIZE)
@@ -379,15 +381,21 @@ class ServerThread(QThread):
                                         continue
                                 except:
                                     pass
-                            # 如果不是TUNNEL_READY，作为普通控制连接处理
-                            conn.sendall(first_data)
+                            # 如果不是TUNNEL_READY，作为普通控制连接处理，并把已读取的数据传给它
+                            client_thread = threading.Thread(
+                                target=self.handle_client_control,
+                                args=(conn, addr, first_data)
+                            )
+                            client_thread.daemon = True
+                            client_thread.start()
+                            continue
                         except socket.timeout:
                             pass
                         
-                        # 普通控制连接
+                        # 普通控制连接（没有读取到初始数据）
                         client_thread = threading.Thread(
                             target=self.handle_client_control,
-                            args=(conn, addr)
+                            args=(conn, addr, b'')
                         )
                         client_thread.daemon = True
                         client_thread.start()
