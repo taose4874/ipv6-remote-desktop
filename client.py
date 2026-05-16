@@ -90,10 +90,21 @@ class ClientThread(QThread):
                 
     def handle_tunnel(self, tunnel_socket, local_port):
         try:
-            local_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            local_socket.settimeout(5.0)
-            local_socket.connect(('127.0.0.1', local_port))
-            self.log(f'连接本地端口: {local_port}', 'info')
+            # 先尝试IPv6连接
+            try:
+                local_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                local_socket.settimeout(3.0)
+                local_socket.connect(('::1', local_port))
+                self.log(f'用IPv6连接本地端口: {local_port}', 'info')
+            except:
+                # 失败后尝试IPv4连接
+                try:
+                    local_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    local_socket.settimeout(3.0)
+                    local_socket.connect(('127.0.0.1', local_port))
+                    self.log(f'用IPv4连接本地端口: {local_port}', 'info')
+                except:
+                    raise Exception(f'无法连接本地端口 {local_port}（IPv4和IPv6都失败）')
             
             thread1 = threading.Thread(target=self.forward_data, args=(tunnel_socket, local_socket, f'tunnel->{local_port}'))
             thread2 = threading.Thread(target=self.forward_data, args=(local_socket, tunnel_socket, f'{local_port}->tunnel'))
