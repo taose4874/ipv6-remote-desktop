@@ -207,47 +207,21 @@ class ServerThread(QThread):
                     self.pending_connections[proxy_port].remove(game_socket)
                 
     def handle_client_control(self, conn, addr):
+        with self.lock:
+            self.client_counter += 1
+            session_id = self.client_counter
+            
+        client = ClientSession(conn, addr, session_id)
+        
+        with self.lock:
+            self.clients[session_id] = client
+        
+        client_addr = addr[0]
+        self.log(f'客户端连接: {client_addr}', 'success')
+        
         try:
-            conn.settimeout(5.0)
-            
-            # 循环读取直到收到换行符或超时
-            buffer = ''
-            while '\n' not in buffer:
-                data = conn.recv(BUFFER_SIZE)
-                if not data:
-                    conn.close()
-                    return
-                buffer += data.decode('utf-8', errors='ignore')
-            
-            # 检查是否是隧道连接
-            line, rest = buffer.split('\n', 1)
-            try:
-                msg = json.loads(line.strip())
-                if msg.get('type') == 'TUNNEL_READY':
-                    proxy_port = msg.get('proxy_port')
-                    self.log(f'收到隧道连接请求，端口: {proxy_port}', 'info')
-                    # 这是隧道连接
-                    self.handle_tunnel_connection(conn, addr, proxy_port)
-                    return
-            except:
-                pass
-            
-            # 这是控制连接，把剩余的数据放回buffer
-            buffer = rest
-            
-            with self.lock:
-                self.client_counter += 1
-                session_id = self.client_counter
-                
-            client = ClientSession(conn, addr, session_id)
-            
-            with self.lock:
-                self.clients[session_id] = client
-            
-            client_addr = addr[0]
-            self.log(f'客户端连接: {client_addr}', 'success')
-            
             conn.settimeout(2.0)
+            buffer = ''
             while self.running:
                 try:
                     data = conn.recv(BUFFER_SIZE)
