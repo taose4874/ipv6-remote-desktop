@@ -206,24 +206,44 @@ class ServerThread(QThread):
                 if proxy_port in self.pending_connections and game_socket in self.pending_connections[proxy_port]:
                     self.pending_connections[proxy_port].remove(game_socket)
                 
-    def handle_client_control(self, conn, addr, initial_data=b''):
-        with self.lock:
-            self.client_counter += 1
-            session_id = self.client_counter
-            
-        client = ClientSession(conn, addr, session_id)
-        
-        with self.lock:
-            self.clients[session_id] = client
-        
-        client_addr = addr[0]
-        self.log(f'客户端连接: {client_addr}', 'success')
-        
+    def handle_client_control(self, conn, addr):
         try:
+            conn.settimeout(5.0)
+            first_data = conn.recv(BUFFER_SIZE)
+            if not first_data:
+                conn.close()
+                return
+            
+            # 检查是否是隧道连接
+            first_str = first_data.decode('utf-8', errors='ignore')
+            if '\n' in first_str:
+                line, rest = first_str.split('\n', 1)
+                try:
+                    msg = json.loads(line.strip())
+                    if msg.get('type') == 'TUNNEL_READY':
+                        proxy_port = msg.get('proxy_port')
+                        self.log(f'收到隧道连接请求，端口: {proxy_port}', 'info')
+                        # 这是隧道连接，处理剩余数据
+                        self.handle_tunnel_connection(conn, addr, proxy_port)
+                        return
+                except:
+                    pass
+            
+            # 这是控制连接
+            with self.lock:
+                self.client_counter += 1
+                session_id = self.client_counter
+                
+            client = ClientSession(conn, addr, session_id)
+            
+            with self.lock:
+                self.clients[session_id] = client
+            
+            client_addr = addr[0]
+            self.log(f'客户端连接: {client_addr}', 'success')
+            
             conn.settimeout(2.0)
-            buffer = ''
-            if initial_data:
-                buffer += initial_data.decode('utf-8', errors='ignore')
+            buffer = first_str
             while self.running:
                 try:
                     data = conn.recv(BUFFER_SIZE)
@@ -361,41 +381,10 @@ class ServerThread(QThread):
                     try:
                         conn, addr = server_socket.accept()
                         
-                        # 检查是否是客户端的隧道连接
-                        conn.settimeout(2.0)
-                        try:
-                            first_data = conn.recv(1024)
-                            if first_data:
-                                try:
-                                    msg = json.loads(first_data.decode('utf-8').strip())
-                                    if msg.get('type') == 'TUNNEL_READY':
-                                        # 这是隧道连接，交给handle_tunnel_connection处理
-                                        proxy_port = msg.get('proxy_port')
-                                        self.log(f'收到隧道连接请求，端口: {proxy_port}', 'info')
-                                        tunnel_thread = threading.Thread(
-                                            target=self.handle_tunnel_connection,
-                                            args=(conn, addr, proxy_port)
-                                        )
-                                        tunnel_thread.daemon = True
-                                        tunnel_thread.start()
-                                        continue
-                                except:
-                                    pass
-                            # 如果不是TUNNEL_READY，作为普通控制连接处理，并把已读取的数据传给它
-                            client_thread = threading.Thread(
-                                target=self.handle_client_control,
-                                args=(conn, addr, first_data)
-                            )
-                            client_thread.daemon = True
-                            client_thread.start()
-                            continue
-                        except socket.timeout:
-                            pass
-                        
-                        # 普通控制连接（没有读取到初始数据）
+                        # 简单处理：直接交给handle_client_control，让它自己识别
                         client_thread = threading.Thread(
                             target=self.handle_client_control,
-                            args=(conn, addr, b'')
+                            args=(conn, addr)
                         )
                         client_thread.daemon = True
                         client_thread.start()
